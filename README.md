@@ -1,6 +1,8 @@
 # VesselGPT: Autoregressive Modeling of Vascular Geometry
 This repository contains the official implementation of our MICCAI 2025 paper:  
-**"VesselGPT: Autoregressive Modeling of Vascular Geometry"**
+**"VesselGPT: Autoregressive Modeling of Vascular Geometry"**  
+
+**Selected for oral Presentation at MICCAI 2025**
 
 <p align="center">
   <img src="assets/Fig1.jpg" width="600"/>
