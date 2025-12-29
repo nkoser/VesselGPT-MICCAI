@@ -1,4 +1,4 @@
-import vtk
+﻿import vtk
 import numpy as np
 import pickle
 from vtk.util.numpy_support import vtk_to_numpy
@@ -29,7 +29,7 @@ def load_spline_coefficients(filename, k=3):
         t = t_all[_]
         tck = (t, c, k)
         all_tck.append(tck)
-    return all_tck
+    return all_tck 
 import matplotlib.pyplot as plt
 
 
@@ -387,7 +387,7 @@ if __name__ == "__main__":
     num_file = np.load("./generated/clean/val/p398_AAgRAAIMLQYGDAEBHQ8QDBYZ_LICA.npy")
     num_file = np.load("./generated/clean/val/C0032.npy")
     num_file = np.load("./generated/aneux/p15_beam1_abest-model-aneux15-zero-root_gpt2aneux_splines_zero_root/3.npy").reshape(-1, 39)
-    #num_file = np.load("./Datos/AneuxSplines/zero-root/p15/train/C0002.npy").reshape(-1, 39)
+    #num_file = np.load("./Data/AneuxSplines/zero-root/p15/train/C0002.npy").reshape(-1, 39)
 
 
     ####################
@@ -439,7 +439,7 @@ if __name__ == "__main__":
     print("numeor de nodos no nulos", d)
 
     ''''
-    num_file2 = np.load("./Datos/AneuxSplines/p15/val/C0032.npy").reshape(-1, 39)
+    num_file2 = np.load("./Data/AneuxSplines/p15/val/C0032.npy").reshape(-1, 39)
     all_tck2 = []
     centerline2 = num_file2[:,:]
     t_all2 = num_file2[:,27:]

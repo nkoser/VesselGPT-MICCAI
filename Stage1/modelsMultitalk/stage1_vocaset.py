@@ -21,7 +21,7 @@ class VQAutoEncoder(BaseModel):
 
 
 
-    def encode(self, x, x_a=None):
+    def encode(self, x, x_a=None): 
         h = self.encoder(x) ## x --> z'
         h = h.view(x.shape[0], -1, self.args.face_quan_num, self.args.zquant_dim)
         h = h.view(x.shape[0], -1, self.args.zquant_dim)
