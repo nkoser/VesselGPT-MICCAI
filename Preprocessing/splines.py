@@ -5,11 +5,14 @@ from scipy.interpolate import splprep, splev, make_splprep, BSpline
 import matplotlib.pyplot as plt
 import pickle
 import os
-from parseObj import calcularMatriz
+#from parseObj import calcularMatriz
 import traceback
 import networkx as nx
-import Arbol as modelo
+
 from collections import Counter
+
+from Preprocessing.Arbol import Node
+
 
 def get_points_by_line(centerline):
     points_array = []
@@ -390,7 +393,7 @@ def grafo2arbol(grafo):
             break
             
     rad = list(grafo.nodes[numeroNodoInicial]['radio'])
-    nodoRaiz = modelo.Node( numeroNodoInicial, radius =  rad )
+    nodoRaiz = Node( numeroNodoInicial, radius =  rad )
     for vecino in grafo.neighbors( numeroNodoInicial ):
         if vecino != numeroNodoInicial:
             aRecorrer.append( (vecino, numeroNodoInicial,nodoRaiz ) )
@@ -398,7 +401,7 @@ def grafo2arbol(grafo):
         nodoAAgregar, numeroNodoPadre,nodoPadre = aRecorrer.pop(0)
         radius = list(grafo.nodes[nodoAAgregar]['radio'])
     
-        nodoActual = modelo.Node( nodoAAgregar, radius =  radius)
+        nodoActual = Node( nodoAAgregar, radius =  radius)
         nodoPadre.agregarHijo( nodoActual )
         for vecino in grafo.neighbors( nodoAAgregar ):
             if vecino != numeroNodoPadre:

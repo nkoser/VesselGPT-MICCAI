@@ -1,0 +1,42 @@
+﻿# Preprocessing modular config
+
+paths:
+  # Folder that contains raw .vtp meshes.
+  raw_root: ../modelsRaw
+
+  # Root folder where all outputs will be created.
+  output_root: ../modelsNormalizado
+
+  # Optional overrides (uncomment to customize individual paths)
+  # raw_meshes: ../modelsRaw
+  # vessels_normalized: ../modelsNormalizado/vesselsNormalized
+  # centerlines: ../modelsNormalizado/centerlines
+  # centerlines_resampled: ../modelsNormalizado/centerlinesResampled
+  # centerlines_resampled_obj: ../modelsNormalizado/centerlinesResampledOBJ
+  # vessels_obj: ../modelsNormalizado/vesselsOBJ
+  # radius_arrays: ../modelsNormalizado/radius_arrays
+  # splines_coef: ../modelsNormalizado/splines/coeficientes
+  # splines_knots: ../modelsNormalizado/splines/knots
+  # grafos: ../modelsNormalizado/grafos
+  # trees_numpy: ../modelsNormalizado/TreesNumpy
+  # trees_serialized: ../modelsNormalizado/Trees
+  # grafos_splines: ../modelsNormalizado/grafosSplines
+  # trees_splines: ../modelsNormalizado/TreesSplines
+
+params:
+  resample_epsilon: 0.02
+  vmtk_script: vmtknetworkextraction
+  normalize_overwrite: false
+
+flags:
+  normalize_meshes: true
+  extract_centerlines: true
+  resample_centerlines: true
+  centerlines_to_obj: true
+  vessels_to_obj: true
+  radius_arrays: true
+  splines: true
+  graphs: true
+  trees: true
+  graphs_splines: true
+  trees_splines: true
