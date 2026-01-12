@@ -1,6 +1,9 @@
-﻿import os
+import glob
+import os
 import pickle
+import shutil
 import traceback
+from os.path import join
 
 import numpy as np
 import networkx as nx
@@ -26,6 +29,7 @@ import Preprocessing.Arbol as modelo
 
 class PreprocessingPipeline:
     STEP_ORDER = [
+        "copy_raw_data",
         "normalize_meshes",
         "extract_centerlines",
         "resample_centerlines",
@@ -141,11 +145,12 @@ class PreprocessingPipeline:
         reader = vtk.vtkXMLPolyDataReader()
         writer = vtk.vtkXMLPolyDataWriter()
 
-        for mesh in os.listdir(input_dir):
-            if not mesh.endswith(".vtp"):
-                continue
-            src_path = os.path.join(input_dir, mesh)
-            dst_path = os.path.join(self.paths["vessels_normalized"], mesh)
+        meshes = glob.glob(join(input_dir, "*_models", "*", "surface", "*.vtp"))
+
+        for mesh in meshes:
+            src_path = mesh
+            id = mesh.split(os.sep)[-3]
+            dst_path = join(self.paths["vessels_normalized"], id + '.vtp')
             if os.path.exists(dst_path) and not overwrite:
                 continue
 
@@ -493,10 +498,26 @@ class PreprocessingPipeline:
                 print("Error with:", file)
                 traceback.print_exc()
 
+    def copy_raw_data(self):
+        self._ensure_dir(self.paths["vessels_normalized"])
+        input_dir = self.paths["raw_meshes"]
+        overwrite = bool(self.params.get("normalize_overwrite", False))
+
+        meshes = glob.glob(join(input_dir, "*_models", "*", "surface", "*.vtp"))
+        for mesh in meshes:
+            id = mesh.split(os.sep)[-3]
+            dst_path = join(self.paths["vessels_normalized"], id + ".vtp")
+            if os.path.exists(dst_path) and not overwrite:
+                continue
+            shutil.copy2(mesh, dst_path)
+        print("normalize_meshes copy-only: copied raw meshes to vessels_normalized")
+        return
+
     def run(self, only_steps=None):
         self._validate_paths()
 
         step_funcs = {
+            "copy_raw_data": self.copy_raw_data,  # Placeholder if needed
             "normalize_meshes": self.normalize_meshes,
             "extract_centerlines": self.extract_centerlines,
             "resample_centerlines": self.resample_centerlines,

@@ -7,17 +7,13 @@ import torch
 from scipy.interpolate import splev, splprep
 
 
-
-
-
 def sample_spline(coeffs, n_samples, tck=None):
-
     coeffs = list(coeffs)
     t = np.array(coeffs[24:])
     #print("t", t)
     t = np.where(np.abs(t - 1) < 0.01, 1.0, t)
     #print("filtered t", t)
-    c = [np.array(coeffs[i*8:(i*8)+8]) for i in range(3)]
+    c = [np.array(coeffs[i * 8:(i * 8) + 8]) for i in range(3)]
     tck = (t, c, 3)
     u = np.linspace(0, 1, n_samples)
     x, y, z = splev(u, tck)
@@ -27,19 +23,17 @@ def sample_spline(coeffs, n_samples, tck=None):
     else:
         print("WARNING: spline x values are too high, check the coefficients")
         return tck
-         
-    
-	
+
 
 def draw_tree_splines_aux1(ax, tree):
+    if tree == None: return
 
-	if tree == None: return
+    points = sample_spline(tree.data["r"], n_samples=50)
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], c='r', marker='.', s=0.5)
 
-	points = sample_spline(tree.data["r"], n_samples=50)
-	ax.scatter(points[:,0], points[:,1], points[:,2], c='r', marker='.', s = 0.5)
+    draw_tree_splines_aux1(ax, tree.right)
+    draw_tree_splines_aux1(ax, tree.left)
 
-	draw_tree_splines_aux1(ax, tree.right)
-	draw_tree_splines_aux1(ax, tree.left)
 
 def draw_tree_splines_aux(ax, tree, tck=None):
     if tree is None:
@@ -59,25 +53,23 @@ def draw_tree_splines_aux(ax, tree, tck=None):
     draw_tree_splines_aux(ax, tree.left, tck)
 
 
-def draw_tree_splines(tree):
+def draw_tree_splines(tree, figsize=(5, 5)):
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection='3d')
 
-	fig = plt.figure(figsize=(5,5))
-	ax = fig.add_subplot(111, projection='3d')
+    draw_tree_splines_aux(ax, tree)
 
-	draw_tree_splines_aux(ax, tree)
+    root = (tree.data["x"], tree.data["y"], tree.data["z"])
+    ax.scatter(root[0], root[1], root[2], c='g', marker='*', s=25)
 
-	root = (tree.data["x"], tree.data["y"], tree.data["z"])
-	ax.scatter(root[0], root[1], root[2], c='g', marker='*', s = 25)
 
 def draw_tree_aux(tree, points, lines):
-
     points["x"].append(tree.data["x"])
     points["y"].append(tree.data["y"])
     points["z"].append(tree.data["z"])
     points["r"].append(tree.data["r"])
 
-    if tree.left != None: 
-
+    if tree.left != None:
         lines.append({"x1": tree.data["x"], "x2": tree.left.data["x"],
                       "y1": tree.data["y"], "y2": tree.left.data["y"],
                       "z1": tree.data["z"], "z2": tree.left.data["z"],
@@ -85,24 +77,22 @@ def draw_tree_aux(tree, points, lines):
 
         draw_tree_aux(tree.left, points, lines)
 
-    if tree.right != None: 
-        
+    if tree.right != None:
         lines.append({"x1": tree.data["x"], "x2": tree.right.data["x"],
                       "y1": tree.data["y"], "y2": tree.right.data["y"],
                       "z1": tree.data["z"], "z2": tree.right.data["z"],
                       "r1": tree.data["r"], "r2": tree.right.data["r"]})
-        
+
         draw_tree_aux(tree.right, points, lines)
 
-def draw_tree_aux(tree, points, lines):
 
+def draw_tree_aux(tree, points, lines):
     points["x"].append(tree.data["x"])
     points["y"].append(tree.data["y"])
     points["z"].append(tree.data["z"])
     points["r"].append(tree.data["r"])
 
-    if tree.left != None: 
-
+    if tree.left != None:
         lines.append({"x1": tree.data["x"], "x2": tree.left.data["x"],
                       "y1": tree.data["y"], "y2": tree.left.data["y"],
                       "z1": tree.data["z"], "z2": tree.left.data["z"],
@@ -110,18 +100,17 @@ def draw_tree_aux(tree, points, lines):
 
         draw_tree_aux(tree.left, points, lines)
 
-    if tree.right != None: 
-        
+    if tree.right != None:
         lines.append({"x1": tree.data["x"], "x2": tree.right.data["x"],
                       "y1": tree.data["y"], "y2": tree.right.data["y"],
                       "z1": tree.data["z"], "z2": tree.right.data["z"],
                       "r1": tree.data["r"], "r2": tree.right.data["r"]})
-        
+
         draw_tree_aux(tree.right, points, lines)
 
-def draw_tree(tree, set_lims = False):
 
-    points = {"x":[],"y":[],"z":[],"r":[]}
+def draw_tree(tree, set_lims=False):
+    points = {"x": [], "y": [], "z": [], "r": []}
     lines = []
 
     draw_tree_aux(tree, points, lines)
@@ -129,75 +118,73 @@ def draw_tree(tree, set_lims = False):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
-    ax.scatter(points["x"], points["y"], points["z"], c='r', marker='o', s = np.array(points["r"]) * 1000)
+    ax.scatter(points["x"], points["y"], points["z"], c='r', marker='o', s=np.array(points["r"]) * 1000)
 
     for line in lines:
+        ax.plot([line["x1"], line["x2"]],
+                [line["y1"], line["y2"]],
+                [line["z1"], line["z2"]], c='k')
 
-        ax.plot([line["x1"],line["x2"]],
-                [line["y1"],line["y2"]],
-                [line["z1"],line["z2"]], c='k')
-        
     if set_lims:
-        
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.set_zlim(0, 1)
 
     plt.show()
 
-def draw_tree_from_numpy(data, mode = "pre_order", threshold = 1e-2):
 
+def draw_tree_from_numpy(data, mode="pre_order", threshold=1e-2):
     data[np.abs(data) < threshold] = 0
     serial = list(data.flatten())
 
-    tree = deserialize(serial, mode)        
+    tree = deserialize(serial, mode)
     draw_tree(tree)
 
-def draw_tree_from_tokens(tokens, mode = "pre_order", threshold = 1e-2, device = None, decoder = None):
 
+def draw_tree_from_tokens(tokens, mode="pre_order", threshold=1e-2, device=None, decoder=None):
     data = tokens_to_data(tokens, device, decoder)
     if data != None: draw_tree_from_numpy(data, mode, threshold)
 
-def draw_tree_from_file(file, type, mode = "pre_order", threshold = 1e-2, device = None, decoder = None):
 
-    if type == "tokens":                        # .tok files
-        
+def draw_tree_from_file(file, type, mode="pre_order", threshold=1e-2, device=None, decoder=None):
+    if type == "tokens":  # .tok files
+
         tokens = torch.load(file).to(device)
         draw_tree_from_tokens(tokens, mode, threshold, device, decoder)
 
-    elif type == "numpy":                       # .npy files
-        
-        data = np.load(file)                    
+    elif type == "numpy":  # .npy files
+
+        data = np.load(file)
         draw_tree_from_numpy(data, mode, threshold)
 
-    elif type == "tree":                        # .bto files
-        
+    elif type == "tree":  # .bto files
+
         tree = torch.load(file)
         draw_tree(tree)
 
     else:
         raise Exception("UNSUPPORTED TREE FILE TYPE | valid are 'tokens', 'numpy' or 'tree' ")
 
-def draw_tree_grid(trees, set_lims = False, figsize = 2, params = [], title = ""):
 
+def draw_tree_grid(trees, set_lims=False, figsize=2, params=[], title=""):
     sqrt = int(math.sqrt(len(trees)))
     rows, cols = (sqrt, sqrt)
 
     fig = plt.figure(figsize=(cols * figsize, rows * figsize))
 
     fig.suptitle(title, fontsize=10, fontweight="bold")
-    fig.subplots_adjust(top=0.9) 
-    
+    fig.subplots_adjust(top=0.9)
+
     for idx, tree in enumerate(trees):
 
         if idx >= rows * cols:
-            break  
-        
+            break
+
         points = {"x": [], "y": [], "z": [], "r": []}
         lines = []
 
         draw_tree_aux(tree, points, lines)
-        
+
         # param managing
 
         radius_alpha = params[idx]["radius_alpha"] if "radius_alpha" in params[idx] else 50
@@ -211,18 +198,17 @@ def draw_tree_grid(trees, set_lims = False, figsize = 2, params = [], title = ""
         text = params[idx]["text"] if "text" in params[idx] else ""
 
         ax = fig.add_subplot(rows, cols, idx + 1, projection='3d')
-        ax.scatter(points["x"], points["y"], points["z"], c = "k", marker = 'o', s = node_size)
-        
-        for line in lines:
+        ax.scatter(points["x"], points["y"], points["z"], c="k", marker='o', s=node_size)
 
+        for line in lines:
             ax.plot([line["x1"], line["x2"]],
                     [line["y1"], line["y2"]],
-                    [line["z1"], line["z2"]], c = line_color, linewidth = line_width if line_width != 0 else (line["r1"] + line["r2"]) / 2 * radius_alpha )
+                    [line["z1"], line["z2"]], c=line_color,
+                    linewidth=line_width if line_width != 0 else (line["r1"] + line["r2"]) / 2 * radius_alpha)
 
             # linewidth = 
 
         if set_lims:
-
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
             ax.set_zlim(0, 1)
@@ -230,12 +216,10 @@ def draw_tree_grid(trees, set_lims = False, figsize = 2, params = [], title = ""
         ax.set_xticklabels([])
         ax.set_yticklabels([])
         ax.set_zticklabels([])
-        
-        ax.set_title(f'Tree {idx} \n {text}', fontsize = 9)
-    
+
+        ax.set_title(f'Tree {idx} \n {text}', fontsize=9)
+
     fig.tight_layout()
     plt.show()
 
 # -----------------------------------------------------------------------
-
-

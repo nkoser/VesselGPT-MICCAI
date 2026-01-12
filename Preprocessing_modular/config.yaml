@@ -2,10 +2,10 @@
 
 paths:
   # Folder that contains raw .vtp meshes.
-  raw_root: ../modelsRaw
+  raw_root: '/home/sukin707/VesselGPT/DemoData'
 
   # Root folder where all outputs will be created.
-  output_root: ../modelsNormalizado
+  output_root: 'DemoOutput'
 
   # Optional overrides (uncomment to customize individual paths)
   # raw_meshes: ../modelsRaw
@@ -25,11 +25,12 @@ paths:
 
 params:
   resample_epsilon: 0.02
-  vmtk_script: vmtknetworkextraction
+  vmtk_script: vmtknetworkextraction -advancementratio 1.05
   normalize_overwrite: false
 
 flags:
-  normalize_meshes: true
+  copy_raw_data : False
+  normalize_meshes: True
   extract_centerlines: true
   resample_centerlines: true
   centerlines_to_obj: true
