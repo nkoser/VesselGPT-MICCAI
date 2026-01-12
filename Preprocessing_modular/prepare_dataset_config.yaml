@@ -1,0 +1,18 @@
+# Dataset preparation config
+
+paths:
+  input: DemoOutput/TreesSplines_20depth
+  output: DemoOutput/TreesSplines_20depth_prepared
+
+params:
+  k: 39
+  mode: pre_order
+  n_rotations: 10
+  pattern: "*.npy"
+  overwrite: false
+  seed: 125
+  spline_samples: 50
+  spline_smooth: 0.0000001
+  enable_rotation: false
+  enable_scaling: true
+  erase_output: true

@@ -1,0 +1,35 @@
+# Compare two trees (overlay)
+
+paths:
+  tree_a: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/input_epoch_721_batch_0_sample_8.npy'
+  tree_b: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/recon_epoch_721_batch_0_sample_8.npy'
+  # mask_from: '/home/sukin707/VesselGPT/Stage1_New/reconstructions_stage1/input_0.npy'
+  # output_image: Preprocessing_modular/compare_trees.png
+
+params:
+  k: 39
+  mode_a: pre_order
+  mode_b: pre_order
+  # threshold_a: 1e-3
+  threshold_b: 1e-3
+  # mask_threshold: 1e-3
+  edges_source: each  # each | a
+  draw_splines: True
+  spline_samples: 50
+  spline_color_a: "#d62728"
+  spline_color_b: "#9467bd"
+  spline_alpha: 0.6
+  spline_size: 0.5
+  spline_center_root: true
+  align_root: true
+  draw_edges: true
+  edge_alpha: 0.6
+  edge_width: 1.0
+  node_size: 8.0
+  color_a: "#1f77b4"
+  color_b: "#ff7f0e"
+  draw_root: true
+  root_marker: "x"
+  root_size: 60.0
+  title: "Tree overlay"
+  figsize: [ 10, 10 ]
