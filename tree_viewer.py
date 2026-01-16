@@ -141,16 +141,16 @@ def draw_tree_from_numpy(data, mode="pre_order", threshold=1e-2):
     draw_tree(tree)
 
 
-def draw_tree_from_tokens(tokens, mode="pre_order", threshold=1e-2, device=None, decoder=None):
-    data = tokens_to_data(tokens, device, decoder)
+def draw_tree_from_tokens(tokens, mode="pre_order", threshold=1e-2, device=None, decoder=None, null_id=None):
+    data = tokens_to_data(tokens, device, decoder, null_id=null_id)
     if data != None: draw_tree_from_numpy(data, mode, threshold)
 
 
-def draw_tree_from_file(file, type, mode="pre_order", threshold=1e-2, device=None, decoder=None):
+def draw_tree_from_file(file, type, mode="pre_order", threshold=1e-2, device=None, decoder=None, null_id=None):
     if type == "tokens":  # .tok files
 
         tokens = torch.load(file).to(device)
-        draw_tree_from_tokens(tokens, mode, threshold, device, decoder)
+        draw_tree_from_tokens(tokens, mode, threshold, device, decoder, null_id=null_id)
 
     elif type == "numpy":  # .npy files
 

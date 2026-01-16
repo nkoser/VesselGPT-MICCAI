@@ -1,8 +1,8 @@
 # Dataset preparation config
 
 paths:
-  input: DemoOutput/TreesSplines_20depth
-  output: DemoOutput/TreesSplines_20depth_prepared
+  input: DemoOutput1/TreesSplines_20depth
+  output: DemoOutput1/TreesSplines_20depth_prepared
 
 params:
   k: 39
@@ -15,4 +15,5 @@ params:
   spline_smooth: 0.0000001
   enable_rotation: false
   enable_scaling: true
+  refit_splines: false
   erase_output: true

@@ -136,7 +136,7 @@ def deserialize(serial, mode = "pre_order"):
 class IntraDataset(Dataset):
 
     def __init__(self, file_list, root_dir, mode = "pre_order", p = None, val = False):
-        
+
         
         #self.folder_path = folder_path
         #self.file_list = os.listdir(folder_path)  # Call os.listdir only once

@@ -170,29 +170,47 @@ def deserialize(serial, mode = "pre_order", k = 4):
 
     print("UNSUPPORTED DESERIALIZATION MODE")
 
-def tokens_to_data(tokens, device, decoder):
+def tokens_to_data(tokens, device, decoder, null_id=None):
 
     if len(tokens.shape) != 1 : raise Exception("'tokens' shape must be 1")
 
-    if tokens[0] == 256: tokens = tokens[1:]
-    if tokens[-1] == 256: tokens = tokens[:-1]
+    if tokens[0] == 256:
+        tokens = tokens[1:]
+    if tokens[-1] == 256:
+        tokens = tokens[:-1]
 
     tokens = tokens.to(device)
+    mask = None
+    if null_id is not None:
+        mask = tokens == null_id
+        if mask.any():
+            tokens = tokens.clone()
+            tokens[mask] = 0
 
     feat = decoder.entry_to_feature(tokens, (-1, 64))
     feat = feat.T.unsqueeze(0)
 
     data = decoder.decode(feat).detach().cpu()
-    
+    if mask is not None and mask.any():
+        tokens_len = mask.numel()
+        seq_len = data.shape[1]
+        if seq_len > 0 and tokens_len % seq_len == 0:
+            tokens_per_row = tokens_len // seq_len
+            row_mask = mask.reshape(seq_len, tokens_per_row).all(dim=1).cpu()
+            data[:, row_mask, :] = 0
+        else:
+            row_mask = mask[:data.shape[1]].cpu()
+            data[:, row_mask, :] = 0
+
     return data
 
-def tokens_to_tree(tokens, threshold = 1e-2, mode = "pre_order", device = None, decoder = None):
+def tokens_to_tree(tokens, threshold = 1e-2, mode = "pre_order", device = None, decoder = None, null_id=None):
 
     tree = Tree({"x":0, "y":0, "z":0, "r":0})
 
     try:
         
-        data = tokens_to_data(tokens, device, decoder)
+        data = tokens_to_data(tokens, device, decoder, null_id=null_id)
 
         data[torch.abs(data) < threshold] = 0
 
@@ -203,11 +221,11 @@ def tokens_to_tree(tokens, threshold = 1e-2, mode = "pre_order", device = None, 
 
     return tree        
 
-def is_valid_tree(tokens, threshold = 1e-2, mode = "pre_order", device = None, decoder = None):
+def is_valid_tree(tokens, threshold = 1e-2, mode = "pre_order", device = None, decoder = None, null_id=None):
 
     try:
         
-        data = tokens_to_data(tokens, device, decoder)
+        data = tokens_to_data(tokens, device, decoder, null_id=null_id)
 
         data[data < threshold] = 0
 

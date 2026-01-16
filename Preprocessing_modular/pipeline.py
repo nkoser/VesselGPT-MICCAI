@@ -105,7 +105,7 @@ class PreprocessingPipeline:
                 "grafos": os.path.join(output_root, "grafos"),
                 "trees_numpy": os.path.join(output_root, "TreesNumpy"),
                 "trees_serialized": os.path.join(output_root, "Trees"),
-                "grafos_splines": os.path.join(output_root, "grafosSplines"),
+                "grafos_splines": os.path.join(output_root, "grafosSplines"), 
                 "trees_splines": os.path.join(output_root, "TreesSplines"),
             }
             for key, value in defaults.items():
@@ -194,7 +194,7 @@ class PreprocessingPipeline:
         self._ensure_dir(self.paths["centerlines"])
         vessels = [f for f in os.listdir(self.paths["vessels_normalized"]) if f.endswith(".vtp")]
         existing = set(os.listdir(self.paths["centerlines"]))
-        vmtk_script = self.params.get("vmtk_script", "vmtknetworkextraction")
+        vmtk_script = self.params.get("vmtk_script", " ")
 
         for file in vessels:
             base = os.path.splitext(file)[0]
@@ -289,7 +289,7 @@ class PreprocessingPipeline:
 
         meshes = sorted(os.listdir(meshfolder))
         for mesh in meshes:
-            calculate_splines(mesh, coef_folder, centerfolder, meshfolder)
+            calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=self.params)
 
     def build_graphs(self):
         self._ensure_dir(self.paths["grafos"])

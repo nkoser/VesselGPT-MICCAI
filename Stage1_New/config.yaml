@@ -3,7 +3,7 @@
 paths:
   train_dir: '../Preprocessing_modular/DemoOutput/TreesSplines_20depth_prepared/train'
   val_dir: '../Preprocessing_modular/DemoOutput/TreesSplines_20depth_prepared/val'
-  output_dir: Stage1_New/output_01
+  output_dir: Stage1_New/output_02
 
 params:
   k: 39
@@ -13,6 +13,8 @@ params:
   batch_size_val: 1
   base_lr: 0.0001
   quant_loss_weight: 1.0
+  mask_null: false
+  null_threshold: 0.001
   epochs: 1000
   step_lr: true
   step_size: 200
@@ -20,6 +22,10 @@ params:
   gamma: 0.9
   seed: 125
   device: 0
+  dataloader_num_workers: 4
+  dataloader_pin_memory: true
+  dataloader_persistent_workers: true
+  dataloader_prefetch_factor: 2
 
 logging:
   log_every: 10
@@ -30,7 +36,7 @@ logging:
 wandb:
   enabled: true
   entity: VesselGPT
-  project: VesselGPT_VQVAE_02
+  project: VesselGPT_VQVAE_03
   mode: online
   watch: true
   # run_name: your_run_name_here

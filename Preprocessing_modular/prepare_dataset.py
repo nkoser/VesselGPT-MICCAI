@@ -101,7 +101,30 @@ def pack_spline_coeffs(tck, target_ctrl=8, target_knot=12):
     return np.concatenate((cx, cy, cz, tt))
 
 
-def build_spline_dataset(data, mode, n_rotations, n_samples, smooth, enable_rotation, enable_scaling):
+def _transform_spline_coeffs(coeffs, root, rot, scale):
+    coeffs = np.asarray(coeffs, dtype=np.float32)
+    if coeffs.size < 36:
+        return coeffs
+    ctrl = coeffs[:24].reshape(3, 8).T
+    if root is not None:
+        ctrl = ctrl - root
+    if rot is not None:
+        ctrl = ctrl @ rot.T
+    if scale is not None:
+        ctrl = ctrl / scale
+    return np.concatenate((ctrl.T.reshape(24), coeffs[24:36]))
+
+
+def build_spline_dataset(
+    data,
+    mode,
+    n_rotations,
+    n_samples,
+    smooth,
+    enable_rotation,
+    enable_scaling,
+    refit_splines,
+):
     root = data[-1, :3] if mode == "post_order" else data[0, :3]
     not_zero_mask = np.mean(data, axis=1) != 0
 
@@ -142,35 +165,58 @@ def build_spline_dataset(data, mode, n_rotations, n_samples, smooth, enable_rota
             data_xyz = data_xyz @ rot.T
             spline_points = spline_points @ rot.T
 
+        scale = None
         if enable_scaling:
             all_data = np.vstack((data_xyz, spline_points))
             abs_max = abs(all_data).max()
             if abs_max > 0:
                 all_data = all_data / abs_max
+                scale = abs_max
             data_xyz = all_data[: len(data_xyz), :]
             spline_points = all_data[len(data_xyz):, :]
 
-        data_splines = []
-        for i in range(0, len(data) * n_samples, n_samples):
-            segment = spline_points[i: i + n_samples]
-            if np.any(segment):
-                xs = segment[:, 0].flatten()
-                ys = segment[:, 1].flatten()
-                zs = segment[:, 2].flatten()
+        if refit_splines:
+            data_splines = []
+            for i in range(0, len(data) * n_samples, n_samples):
+                segment = spline_points[i: i + n_samples]
+                if np.any(segment):
+                    xs = segment[:, 0].flatten()
+                    ys = segment[:, 1].flatten()
+                    zs = segment[:, 2].flatten()
 
-                if all_elements_equal(xs):
-                    t = np.ones(12, dtype=np.float32)
-                    c = [xs[:8], ys[:8], zs[:8]]
-                    tck = (t, c, 3)
+                    if all_elements_equal(xs):
+                        t = np.ones(12, dtype=np.float32)
+                        c = [xs[:8], ys[:8], zs[:8]]
+                        tck = (t, c, 3)
+                    else:
+                        try:
+                            tck, _ = splprep([xs, ys, zs], s=smooth, per=True, nest=12, k=3)
+                        except Exception:
+                            tck = None
+
+                    if tck is None:
+                        datum = data[i // n_samples]
+                        if np.any(datum):
+                            new_row = _transform_spline_coeffs(datum[3:], root, rot, scale)
+                        else:
+                            new_row = np.zeros(36, dtype=np.float32)
+                    else:
+                        new_row = limpiarRadiosSplines(tck)
+                    data_splines.append(new_row)
                 else:
-                    tck, _ = splprep([xs, ys, zs], s=smooth, per=True, nest=12, k=3)
+                    data_splines.append(np.zeros(36))
 
-                new_row = limpiarRadiosSplines(tck)
-                data_splines.append(new_row)
-            else:
-                data_splines.append(np.zeros(36))
-
-        data_splines = np.array(data_splines, dtype=np.float32)
+            data_splines = np.array(data_splines, dtype=np.float32)
+        else:
+            data_splines = []
+            for datum in data:
+                if np.any(datum):
+                    data_splines.append(
+                        _transform_spline_coeffs(datum[3:], root, rot, scale)
+                    )
+                else:
+                    data_splines.append(np.zeros(36))
+            data_splines = np.array(data_splines, dtype=np.float32)
         new_data = np.hstack((data_xyz, data_splines))
         outputs.append(new_data)
 
@@ -201,6 +247,7 @@ def process_file(
     smooth,
     enable_rotation,
     enable_scaling,
+    refit_splines,
 ):
     data = np.load(file_path)
     if data.ndim == 1:
@@ -216,6 +263,7 @@ def process_file(
             smooth,
             enable_rotation,
             enable_scaling,
+            refit_splines,
         )
     else:
         base, _root, not_zero_mask = zero_root(base, mode)
@@ -262,6 +310,8 @@ def main():
     parser.add_argument("--spline-smooth", type=float, default=0.0000001)
     parser.add_argument("--enable-rotation", action="store_true")
     parser.add_argument("--enable-scaling", action="store_true")
+    parser.add_argument("--refit-splines", dest="refit_splines", action="store_true", default=True)
+    parser.add_argument("--no-refit-splines", dest="refit_splines", action="store_false")
     parser.add_argument("--erase-output", action="store_true")
     args = parser.parse_args()
 
@@ -292,6 +342,8 @@ def main():
             args.enable_rotation = bool(params.get("enable_rotation"))
         if "enable_scaling" in params:
             args.enable_scaling = bool(params.get("enable_scaling"))
+        if "refit_splines" in params:
+            args.refit_splines = bool(params.get("refit_splines"))
         if "erase_output" in params:
             args.erase_output = bool(params.get("erase_output"))
 
@@ -326,6 +378,7 @@ def main():
             args.spline_smooth,
             args.enable_rotation,
             args.enable_scaling,
+            args.refit_splines,
         )
         total_written += written
         total_skipped += skipped

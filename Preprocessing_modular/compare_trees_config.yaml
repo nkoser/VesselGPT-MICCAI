@@ -1,8 +1,8 @@
 # Compare two trees (overlay)
 
 paths:
-  tree_a: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/input_epoch_721_batch_0_sample_8.npy'
-  tree_b: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/recon_epoch_721_batch_0_sample_8.npy'
+  tree_a: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/input_epoch_1001_batch_0_sample_60.npy'
+  tree_b: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/recon_epoch_1001_batch_0_sample_60.npy'
   # mask_from: '/home/sukin707/VesselGPT/Stage1_New/reconstructions_stage1/input_0.npy'
   # output_image: Preprocessing_modular/compare_trees.png
 

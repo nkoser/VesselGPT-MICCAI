@@ -2,6 +2,7 @@ import argparse
 import glob
 import os
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -19,17 +20,20 @@ try:
 except Exception:
     wandb = None
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from Stage1.modelsMultitalk.stage1_vocaset import VQAutoEncoder
-from Stage1.metrics.loss import calc_vq_loss
 from Stage1.base.utilities import AverageMeter
 from funciones import IntraDataset, save_best_model, Args
+from Stage1.metrics.loss import calc_vq_loss
 
 
 def load_config(path):
     with open(path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     return cfg or {}
-
 
 def seed_all(seed):
     random.seed(seed)
@@ -54,14 +58,45 @@ def iter_files(folder):
     return [os.path.basename(x) for x in glob.glob(os.path.join(folder, "*.npy"))]
 
 
-def build_loader(folder, mode, batch_size, shuffle):
+def build_loader(
+    folder,
+    mode,
+    batch_size,
+    shuffle,
+    num_workers=0,
+    pin_memory=False,
+    persistent_workers=False,
+    prefetch_factor=None,
+):
     files = iter_files(folder)
     dataset = IntraDataset(files, root_dir=folder, mode=mode)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers if num_workers > 0 else False,
+    }
+    if prefetch_factor is not None and num_workers > 0:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+    loader = DataLoader(dataset, **loader_kwargs)
     return loader
 
 
-def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight):
+def calc_vq_loss_masked(pred, target, quant_loss, quant_loss_weight, mask=None):
+    if mask is None:
+        return calc_vq_loss(pred, target, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight)
+    diff = torch.abs(pred - target)
+    valid = ~mask.unsqueeze(-1)
+    if valid.any():
+        rec_loss = diff[valid].mean()
+    else:
+        rec_loss = torch.zeros((), device=pred.device)
+    total_loss = rec_loss + quant_loss_weight * quant_loss
+    return total_loss, (rec_loss, quant_loss)
+
+
+def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight, mask_null=False, null_threshold=1e-3):
     model.train()
     rec_loss_meter = AverageMeter()
     quant_loss_meter = AverageMeter()
@@ -73,8 +108,11 @@ def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight):
         if inputs.shape[1] <= 1:
             continue
         out, quant_loss, info = model(inputs)
-        loss, loss_details = calc_vq_loss(
-            out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight
+        mask = None
+        if mask_null:
+            mask = torch.all(torch.abs(inputs) <= null_threshold, dim=2)
+        loss, loss_details = calc_vq_loss_masked(
+            out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
         )
         optimizer.zero_grad()
         loss.backward()
@@ -90,7 +128,7 @@ def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight):
     return total_loss_meter.avg, rec_loss_meter.avg, quant_loss_meter.avg, pp_meter.avg
 
 
-def validate(val_loader, model, device, quant_loss_weight, epoch=0):
+def validate(val_loader, model, device, quant_loss_weight, epoch=0, mask_null=False, null_threshold=1e-3):
     accumulated_loss = 0.0
     accumulated_rec = 0.0
     accumulated_quant = 0.0
@@ -102,8 +140,11 @@ def validate(val_loader, model, device, quant_loss_weight, epoch=0):
             if inputs.shape[1] <= 1:
                 continue
             out, quant_loss, _info = model(inputs)
-            loss, loss_details = calc_vq_loss(
-                out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight
+            mask = None
+            if mask_null:
+                mask = torch.all(torch.abs(inputs) <= null_threshold, dim=2)
+            loss, loss_details = calc_vq_loss_masked(
+                out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
             )
             accumulated_loss += loss
             accumulated_rec += loss_details[0]
@@ -155,13 +196,40 @@ def main():
     gamma = float(params.get("gamma", 0.9))
     seed = int(params.get("seed", 125))
     device = resolve_device(params.get("device", 0))
+    mask_null = bool(params.get("mask_null", False))
+    null_threshold = float(params.get("null_threshold", 1e-3))
     seed_all(seed)
 
     if k != 39:
         print("Warning: Stage1 config expects k=39 with current IntraDataset implementation.")
 
-    train_loader = build_loader(train_dir, mode, batch_size, shuffle=True)
-    val_loader = build_loader(val_dir, mode, batch_size_val, shuffle=True)
+    num_workers = int(params.get("dataloader_num_workers", 0))
+    pin_memory = bool(params.get("dataloader_pin_memory", False))
+    persistent_workers = bool(params.get("dataloader_persistent_workers", False))
+    prefetch_factor = params.get("dataloader_prefetch_factor", None)
+    if prefetch_factor is not None:
+        prefetch_factor = int(prefetch_factor)
+
+    train_loader = build_loader(
+        train_dir,
+        mode,
+        batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+    )
+    val_loader = build_loader(
+        val_dir,
+        mode,
+        batch_size_val,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+    )
 
     args_cfg = Args()
     args_cfg.base_lr = base_lr
@@ -203,10 +271,22 @@ def main():
 
     for epoch in range(1, epochs + 1):
         train_loss, rec_loss, quant_loss, perplexity = train_one_epoch(
-            model, train_loader, optimizer, device, args_cfg.quant_loss_weight
+            model,
+            train_loader,
+            optimizer,
+            device,
+            args_cfg.quant_loss_weight,
+            mask_null=mask_null,
+            null_threshold=null_threshold,
         )
         val_loss, rec_loss_val, quant_loss_val = validate(
-            val_loader, model, device, args_cfg.quant_loss_weight, epoch=epoch
+            val_loader,
+            model,
+            device,
+            args_cfg.quant_loss_weight,
+            epoch=epoch,
+            mask_null=mask_null,
+            null_threshold=null_threshold,
         )
 
         if scheduler is not None:
