@@ -1,0 +1,32 @@
+# Mesh reconstruction config
+
+paths:
+  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines_20depth
+  output_dir: /home/sukin707/VesselGPT/MeshOutput1
+
+params:
+  k: 39
+  mode: pre_order
+  pattern: "*.npy"
+  max_files: null
+
+  # Output format: ".stl" or any meshio-supported extension
+  output_ext: ".stl"
+  overwrite: false
+
+  # Centerline spline used to build the SDF vessel
+  centerline_samples: 100
+  centerline_smooth: 0.0
+
+  # SDF sampling (coarse -> fine)
+  samples_coarse: 32    # 2**5
+  samples_fine: 262144  # 2**18
+  sparse: true
+  use_bounds: true
+
+  # Optional preview (requires pyvista)
+  preview: false
+  preview_max: 1
+  preview_offscreen: true
+  preview_image_dir: /home/sukin707/VesselGPT/MeshOutput1/previews
+  preview_color: "red"

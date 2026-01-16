@@ -1,0 +1,40 @@
+paths:
+  split_file_list: null
+  root_dir: null
+  p: null
+  output_dir: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1
+  compare_original: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/input_epoch_721_batch_0_sample_8.npy
+  compare_generated: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/recon_epoch_721_batch_0_sample_8.npy
+
+params:
+  mode: post_order
+  visualize_mode: pre_order
+  k: 39
+  batch_size: 1
+  shuffle: true
+  threshold: 0.01
+  sample_limit: null
+  device: 0
+  seed: 12
+  run_reconstruction: false
+  run_compare: true
+  run_visualize: true
+
+model:
+  type: vocaset
+  checkpoint: models/stage1/aneux/best-model-aneux15-zero-root.pth
+  in_dim: 39
+  hidden_size: 1024
+  num_hidden_layers: 6
+  num_attention_heads: 8
+  intermediate_size: 1536
+  window_size: 1
+  quant_factor: 0
+  face_quan_num: 16
+  neg: 0.2
+  INaffine: false
+  n_embed: 256
+  zquant_dim: 64
+  emma:
+    hidden_dim: 512
+    codebook_size: 2048
