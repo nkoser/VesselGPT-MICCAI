@@ -418,6 +418,118 @@ def vessel3(tree_points, points, splines):
 
     return f
 
+
+@sdf3
+def vessel3_stable(
+    tree_points,
+    points,
+    splines,
+    radius_mode="median",
+    radius_percentile=90,
+    radius_cap=None,
+    center_mode="node",
+    fallback_radius=0.0,
+):
+    """
+    Stable variant of vessel3:
+    - Uses robust radius statistics (median/percentile/mean/max).
+    - Optional centroid-based radius computation.
+    - Avoids polynomial overfitting on small branches.
+    """
+    tck, _ = splprep(tree_points.T, s=0)
+
+    def distance_to_spline(t, p):
+        spline_point = np.array(splev(t, tck))
+        return np.linalg.norm(p - spline_point)
+
+    def find_minmax(t, l):
+        min_t = l[0][0]
+        min_i = 0
+        for i in range(len(l)):
+            if l[i][0] >= min_t and t >= l[i][0]:
+                min_t = l[i][0]
+                min_i = i
+        return min_t, min_i
+
+    n_samples = 100
+    t_values = np.linspace(0, 1, n_samples)
+    sampled_spline = np.array(splev(t_values, tck)).T
+    kdtree = KDTree(sampled_spline)
+
+    splines_sampled = []
+    coeffs = []
+
+    for i in range(len(points)):
+        center = points[i]
+        spline_points = sample_spline(splines[i], n_samples=50)
+
+        if type(spline_points) == type(None):
+            if len(splines_sampled) > 0:
+                spline_points = splines_sampled[-1].copy()
+                center = points[i - 1]
+            else:
+                spline_points = None
+
+        if spline_points is None:
+            radius_scalar = float(fallback_radius)
+        else:
+            center_for_radius = center
+            if center_mode == "centroid":
+                center_for_radius = np.mean(spline_points, axis=0)
+            distances = np.linalg.norm(spline_points - center_for_radius, axis=1)
+            if radius_mode == "max":
+                radius_scalar = float(np.max(distances))
+            elif radius_mode == "mean":
+                radius_scalar = float(np.mean(distances))
+            elif radius_mode == "percentile":
+                radius_scalar = float(np.percentile(distances, radius_percentile))
+            else:
+                radius_scalar = float(np.median(distances))
+            if radius_cap is not None:
+                radius_scalar = min(radius_scalar, float(radius_cap))
+        coeff = np.array([radius_scalar], dtype=np.float32)
+
+        splines_sampled.append(spline_points.copy() if spline_points is not None else None)
+
+        t = minimize_scalar(distance_to_spline, bounds=(0, 1), args=(center,), method="bounded").x
+        if i == len(points) - 1:
+            t = 1.0
+        coeffs.append((t, coeff))
+
+    def f(P):
+        if P.ndim == 1:
+            P = P[np.newaxis, :]
+
+        sdf_values = []
+        for p in P:
+            _, nearest_idx = kdtree.query(p)
+            nearest_points = sampled_spline[nearest_idx]
+            min_dist = np.linalg.norm(p - nearest_points)
+            t = nearest_idx / n_samples
+            t2 = t * 1.05 if t * 1.05 <= 1.0 else t * 0.95
+
+            a = np.array(splev(t, tck))
+            b = np.array(splev(t2, tck))
+
+            angle = calculate_angle(a, b, p)
+            if type(angle) == type(None):
+                angle = np.array([0.0])
+
+            poly_t, poly_i = find_minmax(t, coeffs)
+            size = coeffs[poly_i + 1][0] - coeffs[poly_i][0]
+            t_delta = (t - poly_t) / size if size > 0 else 0
+
+            radius_start = poly(angle, coeffs[poly_i][1])
+            radius_end = poly(angle, coeffs[poly_i + 1][1])
+            radius = (1 - t_delta) * radius_start + t_delta * radius_end
+
+            sdf = min_dist - radius
+            sdf_values.append(sdf)
+
+        return np.array(sdf_values)
+
+    return f
+
 class VesselSDF:
     def __init__(self, tree_points, points, splines, n_samples=50):
         # Fit spline to the tree points

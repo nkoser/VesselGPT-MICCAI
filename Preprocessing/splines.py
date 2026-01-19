@@ -1,3 +1,5 @@
+import warnings
+
 import vtk
 from vtk.util.numpy_support import vtk_to_numpy
 import numpy as np
@@ -126,13 +128,17 @@ def binarizar(graph):
     return graph
 
 
-def calculate_splines(mesh, coef_folder,centerfolder, meshfolder):
+def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
     areas = []
     ratios = []
+    params = params or {}
+    fit_mode = params.get("spline_fit_mode", os.environ.get("VGP_SPLINE_MODE", "legacy"))
+    if fit_mode not in {"legacy", "robust"}:
+        fit_mode = "legacy"
     f = mesh.split(".")[0]
     str = f+".pkl"
     if mesh.split(".")[1] == "vtp" and os.path.exists(centerfolder + f + "-network.vtp") and str not in os.listdir(coef_folder):
-        
+
         centerline = read_vtp(centerfolder + f + "-network.vtp")
         mesh = read_vtp(meshfolder + f + ".vtp")
 
@@ -141,46 +147,49 @@ def calculate_splines(mesh, coef_folder,centerfolder, meshfolder):
         knots = []
         points_Acum = 0
         for j in range(centerline.GetNumberOfCells()):#calculate the radius by branch to avoid problems at the connections between branches
-      
-            numberOfCellPoints = centerline.GetCell(j).GetNumberOfPoints();# number of points of the branch
-            
-            for i in range (numberOfCellPoints):
-                
-                tangent = np.zeros((3))
 
-                weightSum = 0.0;
+            numberOfCellPoints = centerline.GetCell(j).GetNumberOfPoints()# number of points of the branch
+            last_good_tck = None
+
+            for i in range (numberOfCellPoints):
+
+                tangent = np.zeros(3)
+
+                weightSum = 0.0
                 ##tangent line with the previous point (not calculated at the first point)
                 if (i>0):
-                    point0 = centerline.GetPoint(points_Acum-1);
-                    point1 = centerline.GetPoint(points_Acum);
+                    point0 = centerline.GetPoint(points_Acum-1)
+                    point1 = centerline.GetPoint(points_Acum)
 
-                    distance = np.sqrt(vtk.vtkMath.Distance2BetweenPoints(point0,point1));
-                    
+                    distance = np.sqrt(vtk.vtkMath.Distance2BetweenPoints(point0,point1))
+
                     ##vector between the two points divided by the distance
-                
-                    tangent[0] += (point1[0] - point0[0]) / distance;
-                    tangent[1] += (point1[1] - point0[1]) / distance;
-                    tangent[2] += (point1[2] - point0[2]) / distance;
-                    weightSum += 1.0;
 
+                    tangent[0] += (point1[0] - point0[0]) / distance
+                    tangent[1] += (point1[1] - point0[1]) / distance
+                    tangent[2] += (point1[2] - point0[2]) / distance
+                    weightSum += 1.0
 
                 ##tangent line with the next point (not calculated at the last one)
-                
+
                 if (i<numberOfCellPoints-1):
-                    
-                    point1 = centerline.GetPoint(points_Acum);
-                    point0 = centerline.GetPoint(points_Acum+1);
 
-                    distance = np.sqrt(vtk.vtkMath.Distance2BetweenPoints(point0,point1));
-                    tangent[0] += (point0[0] - point1[0]) / distance;
-                    tangent[1] += (point0[1] - point1[1]) / distance;
-                    tangent[2] += (point0[2] - point1[2]) / distance;
-                    weightSum += 1.0;
-                
+                    point1 = centerline.GetPoint(points_Acum)
+                    point0 = centerline.GetPoint(points_Acum+1)
 
-                tangent[0] /= weightSum;
-                tangent[1] /= weightSum;
-                tangent[2] /= weightSum;
+                    distance = np.sqrt(vtk.vtkMath.Distance2BetweenPoints(point0,point1))
+                    tangent[0] += (point0[0] - point1[0]) / distance
+                    tangent[1] += (point0[1] - point1[1]) / distance
+                    tangent[2] += (point0[2] - point1[2]) / distance
+                    weightSum += 1.0
+
+
+                if weightSum > 0:
+                    tangent[0] /= weightSum
+                    tangent[1] /= weightSum
+                    tangent[2] /= weightSum
+                else:
+                    tangent = np.array([0.0, 0.0, 1.0])
                 plane = vtk.vtkPlane()
                 plane.SetOrigin(point1)
                 plane.SetNormal(tangent)
@@ -210,45 +219,106 @@ def calculate_splines(mesh, coef_folder,centerfolder, meshfolder):
                         delaunay = vtk.vtkDelaunay2D()
                         delaunay.SetInputData(filtered_polydata)
                         delaunay.Update()
-                        
+
                         triangulated_surface = delaunay.GetOutput()
                         # Now calculate the surface area
                         mass = vtk.vtkMassProperties()
                         mass.SetInputData(triangulated_surface)
                         mass.Update()
                         area = mass.GetSurfaceArea()
-        
+
                         #areas.append(area)
                         distancias =points-point1
-                        normas = np.linalg.norm(distancias, axis=1) 
+                        normas = np.linalg.norm(distancias, axis=1)
                         ratio = np.min(normas)/np.max(normas)
                         ratios.append(ratio)
-                        x, y, z = points[:, 0], points[:, 1], points[:, 2]
-                        
-                        centroid_x = np.mean(x)
-                        centroid_y = np.mean(y)
-                        centroid_z = np.mean(z)
-                        angles = np.arctan2(y - centroid_y, x - centroid_x)
-
-                        # Step 4: Sort the points by angle (angular order)
-                        sorted_indices = np.argsort(angles)
-                        x_sorted = x[sorted_indices]
-                        y_sorted = y[sorted_indices]
-                        z_sorted = z[sorted_indices]
-                        points = np.vstack([x_sorted, y_sorted, z_sorted]).T
                         tck = None
-                        try:
-                            tck, u = splprep([x_sorted, y_sorted, z_sorted], s=0.01, per=True, nest = 12, k=3)
-                            splines.append(tck[1])#(splc)#
-                            knots.append(tck[0])#(spl.t)#
-                        except:
-                            if tck:
-                                splines.append(tck[1])#(splc)#
-                                knots.append(tck[0])#(spl.t)#
-                            else:
+                        if fit_mode == "robust":
+                            if os.environ.get("VGP_SPLINE_DEBUG"):
+                                if points.shape[0] < 8:
+                                    print(
+                                        f"[splines] {f}: slice {points_Acum - 1} has {points.shape[0]} raw contour points (<8)"
+                                    )
+                            try:
+                                n_resample = params.get("spline_fit_resample", 128)
+                                if n_resample is None:
+                                    n_resample = 128
+                                min_points = params.get("spline_fit_min_points", 12)
+                                if min_points is None:
+                                    min_points = 12
+                                max_retries = params.get("spline_fit_max_retries", 4)
+                                if max_retries is None:
+                                    max_retries = 4
+                                nest = params.get("spline_fit_nest", 12)
+                                if nest is None:
+                                    nest = 12
+                                s_scale = params.get("spline_fit_s_scale", 0.01)
+                                if s_scale is None:
+                                    s_scale = 0.01
+                                retry_factor = params.get("spline_fit_retry_factor", 10.0)
+                                if retry_factor is None:
+                                    retry_factor = 10.0
+
+                                tck = fit_splprep_token_fixed_8(
+                                    contour_points=points,
+                                    tangent_normal=tangent,
+                                    s_initial=params.get("spline_fit_s"),
+                                    n_resample=int(n_resample),
+                                    nest=int(nest),
+                                    max_retries=int(max_retries),
+                                    min_points_for_resample=int(min_points),
+                                    resample_only_if_needed=bool(
+                                        params.get("spline_fit_resample_only_if_needed", True)
+                                    ),
+                                    canonical_start=bool(
+                                        params.get("spline_fit_canonical_start", False)
+                                    ),
+                                    s_scale=float(s_scale),
+                                    retry_factor=float(retry_factor),
+                                )
+                            except Exception:
+                                tck = None
+
+                            if tck is None:
+                                if last_good_tck is not None:
+                                    tck = last_good_tck
+                                else:
+                                    tck = _degenerate_tck_at_point(point1)
+                        else:
+                            x, y, z = points[:, 0], points[:, 1], points[:, 2]
+
+                            centroid_x = np.mean(x)
+                            centroid_y = np.mean(y)
+                            centroid_z = np.mean(z)
+                            angles = np.arctan2(y - centroid_y, x - centroid_x)
+
+                            # Step 4: Sort the points by angle (angular order)
+                            sorted_indices = np.argsort(angles)
+                            x_sorted = x[sorted_indices]
+                            y_sorted = y[sorted_indices]
+                            z_sorted = z[sorted_indices]
+                            points = np.vstack([x_sorted, y_sorted, z_sorted]).T
+                            if os.environ.get("VGP_SPLINE_DEBUG"):
+                                n_points = len(x_sorted)
+                                if n_points < 8:
+                                    print(
+                                        f"[splines] {f}: slice {points_Acum - 1} has {n_points} contour points (<8)"
+                                    )
+                            try:
+                                tck, u = splprep(
+                                    [x_sorted, y_sorted, z_sorted], s=0.01, per=True, nest=12, k=3
+                                )
+                            except Exception:
+                                tck = None
+
+                            if tck is None:
                                 continue
-                       
-                        
+
+                        splines.append(tck[1])#(splc)#
+                        knots.append(tck[0])#(spl.t)#
+                        last_good_tck = tck
+
+
                         u_fine = np.linspace(0, 1, 1000)  # You can adjust the number of points for more resolution
                         spline_points = np.array(splev(u_fine, tck))  # This will give you the evaluated points (x, y, z)
 
@@ -261,7 +331,7 @@ def calculate_splines(mesh, coef_folder,centerfolder, meshfolder):
                         # Calculate the perimeter
                         perimeter = np.sum(distances)
                         areas.append(perimeter)
-                    
+
                             ######################################################################
         centerline_np = get_points_by_line(centerline)
         ##find centerline repeated points
@@ -276,11 +346,11 @@ def calculate_splines(mesh, coef_folder,centerfolder, meshfolder):
                 finish = rama[rama.shape[0]-1, :3]
                 sum += rama.shape[0]
                 e[sum-1] = tuple(finish)
-                            
+
             ##keep only the repeated endpoints
             b = np.array([key for key,  value in Counter(e.values()).items() if value > 1])
 
-                        
+
             ##list with the indexes of the repeated points
             key_list = []
             for element in b: #coordintaes of each repeated point
@@ -299,7 +369,7 @@ def calculate_splines(mesh, coef_folder,centerfolder, meshfolder):
             for i, v in k.items():
                 res[v] = [i] if v not in res.keys() else res[v] + [i]
 
-           
+
             for point in res:
                 ar = [areas[i] for i in res[point]]
                 min = np.min(ar)
@@ -307,25 +377,25 @@ def calculate_splines(mesh, coef_folder,centerfolder, meshfolder):
                 for index in res[point]:
                     splines[index] = splines[min_i]#coordinates
                     knots[index] = knots[min_i]#np.full(12,0.)
-                   
-            
+
+
             indices_greater_than_average = sorted([(i,element) for i, element in enumerate(areas) if element > 3*np.mean(areas)], key=lambda x: x[1], reverse=True)
             for index, area in indices_greater_than_average:
                 x,y,z = centerline_np[index][:3]
-                coordinates = [      
+                coordinates = [
                     np.full(8, x),  # Array for x, repeated 8 times
                     np.full(8, y),  # Array for y, repeated 8 times
                     np.full(8, z)   # Array for z, repeated 8 times
                 ]
                 splines[index] = coordinates
                 knots[index] = np.full(12,1.)
-            
+
         except Exception as e:
             print("EXCEPT")
 
             traceback.print_exc()
             pass
-        
+
         knot_folder = coef_folder.replace("coeficientes", "knots")
         with open(knot_folder+ f +'.pkl', 'wb') as t:
             pickle.dump(knots, t)
@@ -410,3 +480,145 @@ def grafo2arbol(grafo):
     serial = nodoRaiz.serialize(nodoRaiz)
     
     return serial
+
+def _plane_basis_from_normal(n: np.ndarray):
+    n = np.asarray(n, float)
+    nn = np.linalg.norm(n)
+    if nn < 1e-12:
+        n = np.array([0.0, 0.0, 1.0])
+        nn = 1.0
+    n = n / nn
+
+    # deterministisch: Normal Richtung stabilisieren
+    if np.dot(n, np.array([0.0, 0.0, 1.0])) < 0:
+        n = -n
+
+    gx = np.array([1.0, 0.0, 0.0])
+    u = gx - np.dot(gx, n) * n
+    if np.linalg.norm(u) < 1e-8:
+        gy = np.array([0.0, 1.0, 0.0])
+        u = gy - np.dot(gy, n) * n
+    u = u / np.linalg.norm(u)
+    v = np.cross(n, u)
+    v = v / np.linalg.norm(v)
+    return u, v, n
+
+def _sort_contour_in_plane(points: np.ndarray, plane_normal: np.ndarray, canonical_start=True):
+    P = np.asarray(points, float)
+    P = P[np.all(np.isfinite(P), axis=1)]
+    if len(P) < 3:
+        return P
+
+    # dedupe
+    Pr = np.round(P, 6)
+    _, idx = np.unique(Pr, axis=0, return_index=True)
+    P = P[np.sort(idx)]
+    if len(P) < 3:
+        return P
+
+    u, v, _ = _plane_basis_from_normal(plane_normal)
+    c = P.mean(axis=0)
+    D = P - c
+    x2 = D @ u
+    y2 = D @ v
+    ang = np.arctan2(y2, x2)
+    order = np.argsort(ang)
+    P = P[order]
+
+    # konsistente Orientierung (CCW)
+    x2s, y2s = x2[order], y2[order]
+    signed_area = 0.5 * np.sum(x2s * np.roll(y2s, -1) - y2s * np.roll(x2s, -1))
+    if signed_area < 0:
+        P = P[::-1]
+        x2s = x2s[::-1]
+
+    # kanonischer Startpunkt (für Token-Konsistenz)
+    if canonical_start:
+        start = int(np.argmax(x2s))
+        P = np.roll(P, -start, axis=0)
+    return P
+
+def _resample_closed_polyline(P: np.ndarray, n_resample: int = 128):
+    # P ist sortiert (Nx3), wir behandeln es als geschlossene Kontur
+    if len(P) < 3:
+        return P
+
+    P_closed = np.vstack([P, P[0]])
+    seg = np.linalg.norm(np.diff(P_closed, axis=0), axis=1)
+    total = float(np.sum(seg))
+    if not np.isfinite(total) or total < 1e-9:
+        return P
+
+    s = np.concatenate([[0.0], np.cumsum(seg)])  # (N+1,)
+    s_target = np.linspace(0.0, total, n_resample, endpoint=False)
+
+    x = np.interp(s_target, s, P_closed[:, 0])
+    y = np.interp(s_target, s, P_closed[:, 1])
+    z = np.interp(s_target, s, P_closed[:, 2])
+    return np.column_stack([x, y, z])
+
+
+def _degenerate_tck_at_point(p: np.ndarray):
+    x, y, z = float(p[0]), float(p[1]), float(p[2])
+    coeffs = [
+        np.full(8, x),
+        np.full(8, y),
+        np.full(8, z),
+    ]
+    knots = np.full(12, 1.0)
+    return (knots, coeffs, 3)
+
+def fit_splprep_token_fixed_8(
+    contour_points: np.ndarray,
+    tangent_normal: np.ndarray,
+    s_initial: float | None = None,
+    n_resample: int = 128,
+    nest: int = 12,
+    max_retries: int = 4,
+    min_points_for_resample: int = 12,
+    resample_only_if_needed: bool = True,
+    canonical_start: bool = False,
+    s_scale: float = 0.01,
+    retry_factor: float = 10.0,
+):
+    """
+    Robust: sortiert+resampled Kontur, dann splprep mit k=3, per=True, nest=12.
+    Bei Warnung/Fehler wird s automatisch größer gemacht (mehr Glättung).
+    """
+    P = _sort_contour_in_plane(contour_points, tangent_normal, canonical_start=canonical_start)
+    if resample_only_if_needed:
+        if len(P) < min_points_for_resample:
+            P = _resample_closed_polyline(P, n_resample=n_resample)
+    else:
+        P = _resample_closed_polyline(P, n_resample=n_resample)
+
+    if len(P) < 8:
+        raise ValueError(f"Zu wenige Konturpunkte nach Resampling: {len(P)} (<8)")
+
+    x, y, z = P[:, 0], P[:, 1], P[:, 2]
+
+    # Scale-aware start for s if not provided.
+    if s_initial is None:
+        c = P.mean(axis=0)
+        r = np.median(np.linalg.norm(P - c, axis=1))
+        s = (s_scale * r) ** 2 * len(P)
+    else:
+        s = float(s_initial)
+
+    # Retry strategy: increase s when splprep fails.
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                tck, u = splprep([x, y, z], k=3, per=True, s=s, nest=nest)
+            # Optional: prüfen, ob du wirklich 12 Knots hast:
+            # len(tck[0]) sollte bei deinem Setup oft 12 sein
+            return tck  # tck = (knots, coeffs, k)
+        except Exception as e:
+            last_err = e
+            s *= retry_factor
+            continue
+
+    raise RuntimeError(f"splprep failed even after retries. Last error: {last_err}")
+

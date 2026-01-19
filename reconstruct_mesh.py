@@ -26,7 +26,7 @@ if REPO_ROOT not in sys.path:
 
 from tree_functions import deserialize
 from sdf import union
-from sdf.d3 import vessel3
+from sdf.d3 import vessel3, vessel3_stable
 
 
 def load_config(path):
@@ -90,20 +90,236 @@ def sample_spline(tck, num_samples):
     return np.vstack((x, y, z)).T
 
 
-def build_sdf(tree, k, centerline_samples, centerline_smooth):
+def sample_spline_coeffs(coeffs, n_samples):
+    coeffs = list(coeffs)
+    if len(coeffs) < 36:
+        return None
+    t = np.array(coeffs[24:36], dtype=np.float64)
+    if t.shape[0] != 12:
+        return None
+    if not np.all(np.isfinite(t)):
+        return None
+    t = np.where(np.abs(t - 1) < 0.01, 1.0, t)
+    c = [np.array(coeffs[i * 8 : (i + 1) * 8], dtype=np.float64) for i in range(3)]
+    if not all(np.all(np.isfinite(ci)) for ci in c):
+        return None
+    tck = (t, c, 3)
+    u = np.linspace(0, 1, n_samples, endpoint=False)
+    x, y, z = splev(u, tck)
+    return np.column_stack((x, y, z))
+
+
+def align_ring(prev, curr, allow_flip=True):
+    if prev is None or curr is None:
+        return curr
+    if prev.shape != curr.shape:
+        return curr
+
+    def best_shift_score(reference, ring):
+        n = reference.shape[0]
+        best_shift = 0
+        best_score = None
+        for shift in range(n):
+            rolled = np.roll(ring, -shift, axis=0)
+            score = np.sum((reference - rolled) ** 2)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_shift = shift
+        return np.roll(ring, -best_shift, axis=0), best_score
+
+    aligned, score = best_shift_score(prev, curr)
+    if allow_flip:
+        flipped = curr[::-1].copy()
+        aligned_flip, score_flip = best_shift_score(prev, flipped)
+        if score_flip is not None and (score is None or score_flip < score):
+            return aligned_flip
+    return aligned
+
+
+def ring_radius(points):
+    center = np.mean(points, axis=0)
+    distances = np.linalg.norm(points - center, axis=1)
+    return float(np.median(distances))
+
+
+def build_loft_polydata(rings, add_caps):
+    try:
+        import vtk
+    except Exception as exc:
+        raise RuntimeError("VTK is required for loft reconstruction.") from exc
+
+    if len(rings) < 2:
+        return None
+
+    n_points = rings[0].shape[0]
+    points = vtk.vtkPoints()
+    polys = vtk.vtkCellArray()
+
+    for ring in rings:
+        if ring.shape[0] != n_points:
+            return None
+        for point in ring:
+            points.InsertNextPoint(float(point[0]), float(point[1]), float(point[2]))
+
+    for r in range(len(rings) - 1):
+        for i in range(n_points):
+            i0 = r * n_points + i
+            i1 = r * n_points + (i + 1) % n_points
+            i2 = (r + 1) * n_points + (i + 1) % n_points
+            i3 = (r + 1) * n_points + i
+            quad = vtk.vtkQuad()
+            quad.GetPointIds().SetId(0, i0)
+            quad.GetPointIds().SetId(1, i1)
+            quad.GetPointIds().SetId(2, i2)
+            quad.GetPointIds().SetId(3, i3)
+            polys.InsertNextCell(quad)
+
+    if add_caps:
+        start_center = np.mean(rings[0], axis=0)
+        end_center = np.mean(rings[-1], axis=0)
+        start_id = points.InsertNextPoint(float(start_center[0]), float(start_center[1]), float(start_center[2]))
+        end_id = points.InsertNextPoint(float(end_center[0]), float(end_center[1]), float(end_center[2]))
+
+        for i in range(n_points):
+            i0 = i
+            i1 = (i + 1) % n_points
+            tri = vtk.vtkTriangle()
+            tri.GetPointIds().SetId(0, start_id)
+            tri.GetPointIds().SetId(1, i1)
+            tri.GetPointIds().SetId(2, i0)
+            polys.InsertNextCell(tri)
+
+        base = (len(rings) - 1) * n_points
+        for i in range(n_points):
+            i0 = base + i
+            i1 = base + (i + 1) % n_points
+            tri = vtk.vtkTriangle()
+            tri.GetPointIds().SetId(0, end_id)
+            tri.GetPointIds().SetId(1, i0)
+            tri.GetPointIds().SetId(2, i1)
+            polys.InsertNextCell(tri)
+
+    polydata = vtk.vtkPolyData()
+    polydata.SetPoints(points)
+    polydata.SetPolys(polys)
+    return polydata
+
+
+def build_loft_mesh(tree, k, params):
+    try:
+        import vtk
+    except Exception as exc:
+        raise RuntimeError("VTK is required for loft reconstruction.") from exc
+
+    branches = get_branches(tree, k)
+    if not branches:
+        return None
+
+    spline_samples = int(params.get("spline_samples", 50))
+    loft_align = bool(params.get("loft_align", True))
+    loft_allow_flip = bool(params.get("loft_allow_flip", True))
+    loft_caps = bool(params.get("loft_caps", False))
+    loft_clean = bool(params.get("loft_clean", True))
+    loft_min_radius = float(params.get("loft_min_radius", 0.0))
+    append = vtk.vtkAppendPolyData()
+
+    for branch in branches:
+        splines = branch[:, 3:]
+        rings = []
+        prev = None
+        for coeffs in splines:
+            points = sample_spline_coeffs(coeffs, spline_samples)
+            if points is None:
+                if prev is not None:
+                    points = prev.copy()
+                else:
+                    continue
+            if not np.all(np.isfinite(points)):
+                if prev is not None:
+                    points = prev.copy()
+                else:
+                    continue
+            if loft_min_radius > 0 and ring_radius(points) < loft_min_radius:
+                if prev is not None:
+                    points = prev.copy()
+                else:
+                    continue
+            if loft_align:
+                points = align_ring(prev, points, allow_flip=loft_allow_flip)
+            rings.append(points)
+            prev = points
+
+        poly = build_loft_polydata(rings, loft_caps)
+        if poly is None:
+            continue
+        append.AddInputData(poly)
+
+    append.Update()
+    polydata = append.GetOutput()
+    if loft_clean:
+        cleaner = vtk.vtkCleanPolyData()
+        cleaner.SetInputData(polydata)
+        cleaner.Update()
+        polydata = cleaner.GetOutput()
+
+    tri = vtk.vtkTriangleFilter()
+    tri.SetInputData(polydata)
+    tri.Update()
+    return tri.GetOutput()
+
+
+def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
     branches = get_branches(tree, k)
     if not branches:
         return None
 
     vessels = []
+    recon_mode = params.get("recon_mode", "legacy")
+    if recon_mode not in {"legacy", "stable", "sdf_offset"}:
+        recon_mode = "legacy"
+
+    radius_mode = params.get("radius_mode", "median")
+    radius_percentile = params.get("radius_percentile", 90)
+    radius_cap = params.get("radius_cap")
+    center_mode = params.get("center_mode", "node")
+    fallback_radius = params.get("fallback_radius", 0.0)
+    spline_samples = int(params.get("spline_samples", 50))
     for branch in branches:
         nodes = branch[:, :3]
         splines = branch[:, 3:]
-        tck = create_3d_spline(nodes, centerline_smooth)
+        centerline_nodes = nodes
+        if recon_mode == "sdf_offset":
+            centers = []
+            last_center = None
+            for coeffs, node in zip(splines, nodes):
+                points = sample_spline_coeffs(coeffs, spline_samples)
+                if points is None:
+                    center = last_center if last_center is not None else node
+                else:
+                    center = np.mean(points, axis=0)
+                centers.append(center)
+                last_center = center
+            centerline_nodes = np.array(centers, dtype=np.float32)
+        tck = create_3d_spline(centerline_nodes, centerline_smooth)
         if tck is None:
             continue
         sampled = sample_spline(tck, centerline_samples)
-        vessels.append(vessel3(sampled, nodes, splines))
+        if recon_mode in {"stable", "sdf_offset"}:
+            centers_for_radius = centerline_nodes if recon_mode == "sdf_offset" else nodes
+            vessels.append(
+                vessel3_stable(
+                    sampled,
+                    centers_for_radius,
+                    splines,
+                    radius_mode=radius_mode,
+                    radius_percentile=radius_percentile,
+                    radius_cap=radius_cap,
+                    center_mode=center_mode,
+                    fallback_radius=fallback_radius,
+                )
+            )
+        else:
+            vessels.append(vessel3(sampled, nodes, splines))
 
     if not vessels:
         return None
@@ -140,9 +356,9 @@ def process_file(path, output_dir, params):
         data = data.reshape((-1, k))
     serial = list(data.flatten())
     tree = deserialize(serial, mode=mode, k=k)
-    sdf_obj = build_sdf(tree, k, centerline_samples, centerline_smooth)
-    if sdf_obj is None:
-        return "skip", None
+    recon_mode = params.get("recon_mode", "legacy")
+    if recon_mode not in {"legacy", "stable", "sdf_offset", "loft"}:
+        recon_mode = "legacy"
 
     base = os.path.splitext(os.path.basename(path))[0]
     out_path = os.path.join(output_dir, base + output_ext)
@@ -150,12 +366,36 @@ def process_file(path, output_dir, params):
         return "skip", out_path
 
     os.makedirs(output_dir, exist_ok=True)
-    bounds = sdf_obj.save(out_path, samples=samples_coarse, sparse=sparse)
-    if samples_fine:
-        if use_bounds:
-            sdf_obj.save(out_path, samples=samples_fine, bounds=bounds, sparse=sparse)
+    if recon_mode == "loft":
+        try:
+            import vtk
+        except Exception as exc:
+            raise RuntimeError("VTK is required for loft reconstruction.") from exc
+        mesh = build_loft_mesh(tree, k, params)
+        if mesh is None:
+            return "skip", None
+        ext = os.path.splitext(out_path)[1].lower()
+        if ext == ".stl":
+            writer = vtk.vtkSTLWriter()
+        elif ext == ".vtp":
+            writer = vtk.vtkXMLPolyDataWriter()
+        elif ext == ".ply":
+            writer = vtk.vtkPLYWriter()
         else:
-            sdf_obj.save(out_path, samples=samples_fine, sparse=sparse)
+            raise RuntimeError(f"Unsupported loft output extension: {ext}")
+        writer.SetFileName(out_path)
+        writer.SetInputData(mesh)
+        writer.Write()
+    else:
+        sdf_obj = build_sdf(tree, k, centerline_samples, centerline_smooth, params)
+        if sdf_obj is None:
+            return "skip", None
+        bounds = sdf_obj.save(out_path, samples=samples_coarse, sparse=sparse)
+        if samples_fine:
+            if use_bounds:
+                sdf_obj.save(out_path, samples=samples_fine, bounds=bounds, sparse=sparse)
+            else:
+                sdf_obj.save(out_path, samples=samples_fine, sparse=sparse)
     return "ok", out_path
 
 

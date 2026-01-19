@@ -2,10 +2,10 @@
 
 paths:
   # Folder that contains raw .vtp meshes.
-  raw_root: '/home/sukin707/VesselGPT/DemoData'
+  raw_root: '/home/sukin707/VesselGPT/DemoData1'
 
   # Root folder where all outputs will be created.
-  output_root: 'DemoOutput'
+  output_root: 'DemoOutput1'
 
   # Optional overrides (uncomment to customize individual paths)
   # raw_meshes: ../modelsRaw
@@ -24,13 +24,22 @@ paths:
   # trees_splines: ../modelsNormalizado/TreesSplines
 
 params:
-  resample_epsilon: 0.02
+  resample_epsilon: 0.07
   vmtk_script: vmtknetworkextraction -advancementratio 1.05
   normalize_overwrite: false
+  spline_fit_mode: robust
+  spline_fit_resample_only_if_needed: true
+  spline_fit_min_points: 12
+  spline_fit_resample: 128
+  spline_fit_canonical_start: false
+  spline_fit_s: null
+  spline_fit_s_scale: 0.01
+  spline_fit_max_retries: 4
+  spline_fit_retry_factor: 10.0
 
 flags:
   copy_raw_data : False
-  normalize_meshes: True
+  normalize_meshes: true
   extract_centerlines: true
   resample_centerlines: true
   centerlines_to_obj: true

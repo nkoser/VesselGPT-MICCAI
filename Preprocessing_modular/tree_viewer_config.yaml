@@ -2,14 +2,14 @@
 
 paths:
   # Input can be a directory or a single .npy file
-  input: '/home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines_20depth_prepared/C0001.npy'
+  input: '/home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines/C0001.npy'
   #input: 'DemoOutput/TreesSplines_20depth_prepared'  #../Data/stage1-limpias/numpy_preorder_augmented/p20/train #'DemoOutput/TreesSplines_20depth_prepared' #'../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #'DemoOutput/TreesSplines_20depth_prepared' # '../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #DemoOutput/TreesSplines_20depth
   # Optional: set to a file path to save an image instead of showing a window
   # output_image: DemoOutput/TreesSplines_20depth/view.png
 
 params:
   k: 39
-  mode: pre_order
+  mode: post_order
   pattern: "*.npy"
   # Pick a file by name or index (0-based). Leave both empty for first file.
   # file_name: C0001.npy
@@ -51,7 +51,7 @@ params:
   spline_color: "#cc0000"
   spline_alpha: 0.6
   spline_size: 0.5
-  spline_center_root: true
+  spline_center_root: false
 
   draw_spheres: true
   max_spheres: 50

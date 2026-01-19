@@ -1,28 +1,45 @@
 # Mesh reconstruction config
 
 paths:
-  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines_20depth
+  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines
   output_dir: /home/sukin707/VesselGPT/MeshOutput1
 
 params:
   k: 39
-  mode: pre_order
+  mode: post_order
   pattern: "*.npy"
   max_files: null
 
-  # Output format: ".stl" or any meshio-supported extension
+  # Reconstruction mode: legacy (notebook), stable (robust radii),
+  # sdf_offset (centerline shifted to contour centroids), or loft (VTK surface)
+  recon_mode: loft
+  radius_mode: percentile    # median | percentile | mean | max
+  radius_percentile: 90
+  radius_cap: null           # e.g. 0.25 to clamp oversized bulges
+  center_mode: centroid      # node | centroid
+  fallback_radius: 0.0
+  spline_samples: 50         # samples per spline for centroid/loft
+
+  # Output format: ".stl" | ".vtp" | ".ply" (VTK writers)
   output_ext: ".stl"
-  overwrite: false
+  overwrite: true
 
   # Centerline spline used to build the SDF vessel
-  centerline_samples: 100
+  centerline_samples: 200
   centerline_smooth: 0.0
 
   # SDF sampling (coarse -> fine)
   samples_coarse: 32    # 2**5
-  samples_fine: 262144  # 2**18
-  sparse: true
+  samples_fine: 524288  # 2**19
+  sparse: false
   use_bounds: true
+
+  # Loft settings (VTK only)
+  loft_caps: false
+  loft_align: true
+  loft_allow_flip: true
+  loft_clean: true
+  loft_min_radius: 0.0
 
   # Optional preview (requires pyvista)
   preview: false
