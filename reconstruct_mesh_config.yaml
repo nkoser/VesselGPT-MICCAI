@@ -12,7 +12,11 @@ params:
 
   # Reconstruction mode: legacy (notebook), stable (robust radii),
   # sdf_offset (centerline shifted to contour centroids), or loft (VTK surface)
-  recon_mode: loft
+  recon_mode: sdf_offset
+  # For recon_mode=legacy: choose the implementation
+  #   original -> matches notebook / polyfit radius
+  #   robust   -> angle-binned radius, safer but not identical
+  legacy_variant: original
   radius_mode: percentile    # median | percentile | mean | max
   radius_percentile: 90
   radius_cap: null           # e.g. 0.25 to clamp oversized bulges
@@ -40,6 +44,17 @@ params:
   loft_allow_flip: true
   loft_clean: true
   loft_min_radius: 0.0
+
+  # Optional: save resampled centerlines (per branch, columns = x,y,z,branch_id)
+  save_centerline: true
+  centerline_output_dir: /home/sukin707/VesselGPT/MeshOutput1/centerlines
+  centerline_suffix: "_centerline.stl"
+  centerline_format: stl
+  centerline_tube_radius: 0.001
+  centerline_tube_sides: 8
+  # branches (root->leaf) or edges (unique parent-child edges)
+  centerline_mode: edges
+  centerline_edge_samples: 2
 
   # Optional preview (requires pyvista)
   preview: false

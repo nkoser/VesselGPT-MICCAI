@@ -26,7 +26,7 @@ if REPO_ROOT not in sys.path:
 
 from tree_functions import deserialize
 from sdf import union
-from sdf.d3 import vessel3, vessel3_stable
+from sdf.d3 import vessel3, vessel3_robust, vessel3_stable 
 
 
 def load_config(path):
@@ -74,14 +74,42 @@ def get_branches(tree, k):
     return [np.array(branch, dtype=np.float32) for branch in branches]
 
 
+def get_edges(tree):
+    edges = []
+
+    def dfs(node):
+        if node is None:
+            return
+        if node.left is not None:
+            edges.append((node, node.left))
+            dfs(node.left)
+        if node.right is not None:
+            edges.append((node, node.right))
+            dfs(node.right)
+
+    dfs(tree)
+    return edges
+
+
 def create_3d_spline(points, smooth):
+    points = np.asarray(points, dtype=np.float64)
+    # drop NaN/Inf
+    mask = np.all(np.isfinite(points), axis=1)
+    points = points[mask]
+    # drop duplicates (approx)
+    if len(points) > 1:
+        _, idx = np.unique(np.round(points, 6), axis=0, return_index=True)
+        points = points[np.sort(idx)]
     if len(points) < 2:
         return None
     k = 3
     if len(points) <= 3:
         k = max(1, len(points) - 1)
-    tck, _ = splprep(points.T, s=smooth, k=k)
-    return tck
+    try:
+        tck, _ = splprep(points.T, s=smooth, k=k)
+        return tck
+    except Exception:
+        return None
 
 
 def sample_spline(tck, num_samples):
@@ -277,6 +305,7 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
     recon_mode = params.get("recon_mode", "legacy")
     if recon_mode not in {"legacy", "stable", "sdf_offset"}:
         recon_mode = "legacy"
+    legacy_variant = params.get("legacy_variant", "original")  # original | robust
 
     radius_mode = params.get("radius_mode", "median")
     radius_percentile = params.get("radius_percentile", 90)
@@ -319,7 +348,10 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
                 )
             )
         else:
-            vessels.append(vessel3(sampled, nodes, splines))
+            if legacy_variant == "robust":
+                vessels.append(vessel3_robust(sampled, nodes, splines))
+            else:
+                vessels.append(vessel3(sampled, nodes, splines))
 
     if not vessels:
         return None
@@ -350,6 +382,14 @@ def process_file(path, output_dir, params):
     samples_fine = parse_int(params.get("samples_fine"), 262144)
     sparse = bool(params.get("sparse", True))
     use_bounds = bool(params.get("use_bounds", True))
+    save_centerline = bool(params.get("save_centerline", False))
+    centerline_out_dir = params.get("centerline_output_dir") or output_dir
+    centerline_suffix = params.get("centerline_suffix", "_centerline.npy")
+    centerline_format = params.get("centerline_format", "npy").lower()
+    centerline_tube_radius = float(params.get("centerline_tube_radius", 0.0))
+    centerline_tube_sides = int(params.get("centerline_tube_sides", 8))
+    centerline_mode = params.get("centerline_mode", "branches")
+    centerline_edge_samples = int(params.get("centerline_edge_samples", 2))
 
     data = np.load(path)
     if data.ndim == 1:
@@ -366,6 +406,102 @@ def process_file(path, output_dir, params):
         return "skip", out_path
 
     os.makedirs(output_dir, exist_ok=True)
+
+    # Optional: save resampled centerlines
+    if save_centerline:
+        centerline_points = []
+        centerline_branches = []
+        if centerline_mode == "edges":
+            edges = get_edges(tree)
+            samples = max(2, centerline_edge_samples)
+            for e_idx, (parent, child) in enumerate(edges):
+                p0 = np.array([parent.data["x"], parent.data["y"], parent.data["z"]], dtype=np.float32)
+                p1 = np.array([child.data["x"], child.data["y"], child.data["z"]], dtype=np.float32)
+                t = np.linspace(0.0, 1.0, samples, dtype=np.float32)
+                sampled = p0[None, :] * (1.0 - t[:, None]) + p1[None, :] * t[:, None]
+                branch_col = np.full((sampled.shape[0], 1), e_idx, dtype=np.int32)
+                arr = np.hstack((sampled.astype(np.float32), branch_col))
+                centerline_points.append(arr)
+                centerline_branches.append(sampled.astype(np.float32))
+        else:
+            branches = get_branches(tree, k)
+            for b_idx, branch in enumerate(branches):
+                nodes = branch[:, :3]
+                tck = create_3d_spline(nodes, centerline_smooth)
+                if tck is None:
+                    continue
+                sampled = sample_spline(tck, centerline_samples)
+                if sampled is None or len(sampled) == 0:
+                    continue
+                branch_col = np.full((sampled.shape[0], 1), b_idx, dtype=np.int32)
+                arr = np.hstack((sampled.astype(np.float32), branch_col))
+                centerline_points.append(arr)
+                centerline_branches.append(sampled.astype(np.float32))
+        if centerline_points:
+            os.makedirs(centerline_out_dir, exist_ok=True)
+            if centerline_format in {"stl", "obj", "vtp"}:
+                try:
+                    import vtk
+                except Exception as exc:
+                    raise RuntimeError("VTK is required for centerline_format=stl/obj/vtp.") from exc
+                append = vtk.vtkAppendPolyData()
+                for b_idx, pts in enumerate(centerline_branches):
+                    if pts.shape[0] < 2:
+                        continue
+                    vtk_pts = vtk.vtkPoints()
+                    for p in pts:
+                        vtk_pts.InsertNextPoint(float(p[0]), float(p[1]), float(p[2]))
+                    polyline = vtk.vtkPolyLine()
+                    polyline.GetPointIds().SetNumberOfIds(pts.shape[0])
+                    for i in range(pts.shape[0]):
+                        polyline.GetPointIds().SetId(i, i)
+                    cells = vtk.vtkCellArray()
+                    cells.InsertNextCell(polyline)
+                    polydata = vtk.vtkPolyData()
+                    polydata.SetPoints(vtk_pts)
+                    polydata.SetLines(cells)
+                    append.AddInputData(polydata)
+                append.Update()
+                cl_poly = append.GetOutput()
+
+                # STL/OBJ require surface triangles; convert lines -> tube if requested
+                if centerline_format in {"stl", "obj"}:
+                    tube = vtk.vtkTubeFilter()
+                    tube.SetInputData(cl_poly)
+                    tube.SetNumberOfSides(max(3, centerline_tube_sides))
+                    if centerline_tube_radius > 0:
+                        tube.SetRadius(centerline_tube_radius)
+                    else:
+                        tube.SetRadius(0.001)
+                    tube.CappingOn()
+                    tube.Update()
+                    cl_poly = tube.GetOutput()
+
+                if centerline_format == "stl":
+                    cl_ext = centerline_suffix if centerline_suffix.lower().endswith(".stl") else ".stl"
+                    cl_path = os.path.join(centerline_out_dir, base + cl_ext)
+                    writer = vtk.vtkSTLWriter()
+                    writer.SetFileName(cl_path)
+                    writer.SetInputData(cl_poly)
+                    writer.Write()
+                elif centerline_format == "obj":
+                    cl_ext = centerline_suffix if centerline_suffix.lower().endswith(".obj") else ".obj"
+                    cl_path = os.path.join(centerline_out_dir, base + cl_ext)
+                    writer = vtk.vtkOBJWriter()
+                    writer.SetFileName(cl_path)
+                    writer.SetInputData(cl_poly)
+                    writer.Write()
+                else:
+                    cl_ext = centerline_suffix if centerline_suffix.lower().endswith(".vtp") else ".vtp"
+                    cl_path = os.path.join(centerline_out_dir, base + cl_ext)
+                    writer = vtk.vtkXMLPolyDataWriter()
+                    writer.SetFileName(cl_path)
+                    writer.SetInputData(cl_poly)
+                    writer.Write()
+            else:
+                cl_path = os.path.join(centerline_out_dir, base + centerline_suffix)
+                np.save(cl_path, np.vstack(centerline_points))
+
     if recon_mode == "loft":
         try:
             import vtk

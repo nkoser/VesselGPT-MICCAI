@@ -24,7 +24,7 @@ paths:
   # trees_splines: ../modelsNormalizado/TreesSplines
 
 params:
-  resample_epsilon: 0.07
+  resample_epsilon: 0.007
   vmtk_script: vmtknetworkextraction -advancementratio 1.05
   normalize_overwrite: false
   spline_fit_mode: robust
