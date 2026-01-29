@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import os
 import sys
 from glob import glob
@@ -333,25 +334,30 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
         if tck is None:
             continue
         sampled = sample_spline(tck, centerline_samples)
+        t_values = np.linspace(0, 1, sampled.shape[0])
         if recon_mode in {"stable", "sdf_offset"}:
             centers_for_radius = centerline_nodes if recon_mode == "sdf_offset" else nodes
-            vessels.append(
-                vessel3_stable(
-                    sampled,
-                    centers_for_radius,
-                    splines,
-                    radius_mode=radius_mode,
-                    radius_percentile=radius_percentile,
-                    radius_cap=radius_cap,
-                    center_mode=center_mode,
-                    fallback_radius=fallback_radius,
-                )
+            stable_kwargs = dict(
+                radius_mode=radius_mode,
+                radius_percentile=radius_percentile,
+                radius_cap=radius_cap,
+                center_mode=center_mode,
+                fallback_radius=fallback_radius,
             )
+            if "tck" in inspect.signature(vessel3_stable).parameters:
+                stable_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
+            vessels.append(vessel3_stable(sampled, centers_for_radius, splines, **stable_kwargs))
         else:
             if legacy_variant == "robust":
-                vessels.append(vessel3_robust(sampled, nodes, splines))
+                robust_kwargs = {}
+                if "tck" in inspect.signature(vessel3_robust).parameters:
+                    robust_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
+                vessels.append(vessel3_robust(sampled, nodes, splines, **robust_kwargs))
             else:
-                vessels.append(vessel3(sampled, nodes, splines))
+                legacy_kwargs = {}
+                if "tck" in inspect.signature(vessel3).parameters:
+                    legacy_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
+                vessels.append(vessel3(sampled, nodes, splines, **legacy_kwargs))
 
     if not vessels:
         return None

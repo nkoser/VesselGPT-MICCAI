@@ -12,7 +12,7 @@ params:
 
   # Reconstruction mode: legacy (notebook), stable (robust radii),
   # sdf_offset (centerline shifted to contour centroids), or loft (VTK surface)
-  recon_mode: sdf_offset
+  recon_mode: stable
   # For recon_mode=legacy: choose the implementation
   #   original -> matches notebook / polyfit radius
   #   robust   -> angle-binned radius, safer but not identical
@@ -29,7 +29,7 @@ params:
   overwrite: true
 
   # Centerline spline used to build the SDF vessel
-  centerline_samples: 200
+  centerline_samples: 400
   centerline_smooth: 0.0
 
   # SDF sampling (coarse -> fine)
@@ -46,7 +46,7 @@ params:
   loft_min_radius: 0.0
 
   # Optional: save resampled centerlines (per branch, columns = x,y,z,branch_id)
-  save_centerline: true
+  save_centerline: False
   centerline_output_dir: /home/sukin707/VesselGPT/MeshOutput1/centerlines
   centerline_suffix: "_centerline.stl"
   centerline_format: stl

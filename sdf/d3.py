@@ -320,14 +320,15 @@ def sample_spline(coeffs, n_samples):
 
 
 @sdf3
-def vessel3(tree_points, points, splines):
+def vessel3(tree_points, points, splines, tck=None, sampled_spline=None, t_values=None):
     """
     Original legacy implementation (kept for compatibility).
     Uses polyfit on sampled contours and radius interpolation.
     """
 
-    # Fit spline to the provided points
-    tck, u = splprep(tree_points.T, s=0)
+    # Fit spline to the provided points (unless provided)
+    if tck is None:
+        tck, _ = splprep(tree_points.T, s=0)
 
     def distance_to_spline(t, p):
         """
@@ -349,12 +350,15 @@ def vessel3(tree_points, points, splines):
 
         return min_t, min_i
 
-    # Sample the spline at `n_samples` points
-
-    n_samples = 100
-
-    t_values = np.linspace(0, 1, n_samples)
-    sampled_spline = np.array(splev(t_values, tck)).T  # (n_samples, 3)
+    # Sample the spline at `n_samples` points (unless provided)
+    if sampled_spline is None:
+        n_samples = 100
+        t_values = np.linspace(0, 1, n_samples)
+        sampled_spline = np.array(splev(t_values, tck)).T  # (n_samples, 3)
+    else:
+        n_samples = sampled_spline.shape[0]
+        if t_values is None:
+            t_values = np.linspace(0, 1, n_samples)
 
     # Build a KDTree for fast nearest neighbor search
     kdtree = KDTree(sampled_spline)
@@ -457,7 +461,7 @@ def vessel3(tree_points, points, splines):
 
 
 @sdf3
-def vessel3_robust(tree_points, points, splines):
+def vessel3_robust(tree_points, points, splines, tck=None, sampled_spline=None, t_values=None):
     """
     Safer variant of legacy:
     - angle-binned radius tables (avoids polyfit overshoot)
@@ -472,8 +476,9 @@ def vessel3_robust(tree_points, points, splines):
     radius_percentile = 90.0  # robust scalar fallback
     delta_t = 1.0 / n_centerline_samples
 
-    # Fit spline to the provided points
-    tck, _ = splprep(tree_points.T, s=0)
+    # Fit spline to the provided points (unless provided)
+    if tck is None:
+        tck, _ = splprep(tree_points.T, s=0)
 
     def distance_to_spline(t, p):
         """
@@ -490,9 +495,14 @@ def vessel3_robust(tree_points, points, splines):
         b = np.array(splev(t2, tck))
         return a, b
 
-    # Sample the spline at `n_centerline_samples` points
-    t_values = np.linspace(0, 1, n_centerline_samples)
-    sampled_spline = np.array(splev(t_values, tck)).T  # (M, 3)
+    # Sample the spline at `n_centerline_samples` points (unless provided)
+    if sampled_spline is None:
+        t_values = np.linspace(0, 1, n_centerline_samples)
+        sampled_spline = np.array(splev(t_values, tck)).T  # (M, 3)
+    else:
+        if t_values is None:
+            t_values = np.linspace(0, 1, sampled_spline.shape[0])
+        n_centerline_samples = sampled_spline.shape[0]
     tangents = np.array(splev(t_values, tck, der=1)).T
     tangent_norm = np.linalg.norm(tangents, axis=1, keepdims=True)
     tangent_norm[tangent_norm < 1e-12] = 1.0
@@ -650,14 +660,17 @@ def vessel3_robust(tree_points, points, splines):
 
 @sdf3
 def vessel3_stable(
-        tree_points,
-        points,
-        splines,
-        radius_mode="median",
-        radius_percentile=90,
-        radius_cap=None,
-        center_mode="node",
-        fallback_radius=0.0,
+    tree_points,
+    points,
+    splines,
+    radius_mode="median",
+    radius_percentile=90,
+    radius_cap=None,
+    center_mode="node",
+    fallback_radius=0.0,
+    tck=None,
+    sampled_spline=None,
+    t_values=None,
 ):
     """
     Stable variant of vessel3:
@@ -665,7 +678,8 @@ def vessel3_stable(
     - Optional centroid-based radius computation.
     - Avoids polynomial overfitting on small branches.
     """
-    tck, _ = splprep(tree_points.T, s=0)
+    if tck is None:
+        tck, _ = splprep(tree_points.T, s=0)
 
     def distance_to_spline(t, p):
         spline_point = np.array(splev(t, tck))
@@ -681,8 +695,13 @@ def vessel3_stable(
         return min_t, min_i
 
     n_samples = 100
-    t_values = np.linspace(0, 1, n_samples)
-    sampled_spline = np.array(splev(t_values, tck)).T
+    if sampled_spline is None:
+        t_values = np.linspace(0, 1, n_samples)
+        sampled_spline = np.array(splev(t_values, tck)).T
+    else:
+        n_samples = sampled_spline.shape[0]
+        if t_values is None:
+            t_values = np.linspace(0, 1, n_samples)
     kdtree = KDTree(sampled_spline)
 
     splines_sampled = []
