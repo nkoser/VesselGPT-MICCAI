@@ -1,5 +1,6 @@
 import argparse
 import inspect
+import importlib
 import os
 import sys
 from glob import glob
@@ -17,7 +18,7 @@ except Exception as exc:
     raise RuntimeError("PyYAML is required. Install with: pip install pyyaml") from exc
 
 try:
-    from scipy.interpolate import splprep, splev
+    from scipy.interpolate import splprep, splev, PchipInterpolator, UnivariateSpline
 except Exception as exc:
     raise RuntimeError("scipy is required. Install with: pip install scipy") from exc
 
@@ -26,8 +27,49 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from tree_functions import deserialize
-from sdf import union
-from sdf.d3 import vessel3, vessel3_robust, vessel3_stable 
+from sdf import union, blend
+from sdf import progress as sdf_progress
+
+_BACKEND_CACHE = {}
+
+
+def get_backend(params):
+    recon_mode = (params.get("recon_mode", "legacy") or "legacy").lower()
+    sdf_variant = (params.get("sdf_variant", "original") or "original").lower()
+
+    if recon_mode in {"sweep", "sweep_ellipse", "sweep_fast", "sweep_ellipse_fast"}:
+        module_name = "sdf.d3_fast"
+    else:
+        module_name = "sdf.d3_fast" if sdf_variant == "fast" else "sdf.d3"
+
+    if module_name in _BACKEND_CACHE:
+        return _BACKEND_CACHE[module_name]
+
+    mod = importlib.import_module(module_name)
+    backend = {
+        "mod": mod,
+        "sdf3": getattr(mod, "sdf3", None),
+        "smooth_union": getattr(mod, "smooth_union", None),
+        "vessel3": getattr(mod, "vessel3", None),
+        "vessel3_robust": getattr(mod, "vessel3_robust", None),
+        "vessel3_stable": getattr(mod, "vessel3_stable", None),
+        "capped_cone": getattr(mod, "capped_cone", None),
+        "elliptical_tapered_capsule": getattr(mod, "elliptical_tapered_capsule", None),
+    }
+    _BACKEND_CACHE[module_name] = backend
+    return backend
+
+
+def get_sdf_fns(params):
+    b = get_backend(params)
+    return (b["vessel3"], b["vessel3_robust"], b["vessel3_stable"])
+
+
+def get_sweep_primitives_and_union(params):
+    b = get_backend(params)
+    if b["capped_cone"] is None or b["elliptical_tapered_capsule"] is None:
+        raise RuntimeError("Sweep requires backend with sweep primitives (expected in sdf.d3_fast).")
+    return b["capped_cone"], b["elliptical_tapered_capsule"], b["smooth_union"], b["sdf3"]
 
 
 def load_config(path):
@@ -171,6 +213,246 @@ def ring_radius(points):
     return float(np.median(distances))
 
 
+def _branch_arc_t(nodes):
+    nodes = np.asarray(nodes, dtype=np.float64)
+    if len(nodes) == 0:
+        return np.array([], dtype=np.float32)
+    if len(nodes) == 1:
+        return np.array([0.0], dtype=np.float32)
+    seg = np.linalg.norm(np.diff(nodes, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(cum[-1])
+    if not np.isfinite(total) or total <= 1e-12:
+        return np.zeros(len(nodes), dtype=np.float32)
+    return (cum / total).astype(np.float32)
+
+
+def _dedupe_t_points(t_vals, points, r_vals):
+    t_vals = np.asarray(t_vals, dtype=np.float64)
+    points = np.asarray(points, dtype=np.float64)
+    r_vals = np.asarray(r_vals, dtype=np.float64)
+    order = np.argsort(t_vals)
+    t_vals = t_vals[order]
+    points = points[order]
+    r_vals = r_vals[order]
+    unique_t = []
+    unique_p = []
+    unique_r = []
+    i = 0
+    while i < len(t_vals):
+        j = i + 1
+        while j < len(t_vals) and np.isclose(t_vals[j], t_vals[i], atol=1e-6):
+            j += 1
+        unique_t.append(float(t_vals[i]))
+        unique_p.append(np.mean(points[i:j], axis=0))
+        unique_r.append(float(np.mean(r_vals[i:j])))
+        i = j
+    return (
+        np.array(unique_t, dtype=np.float64),
+        np.array(unique_p, dtype=np.float64),
+        np.array(unique_r, dtype=np.float64),
+    )
+
+
+def _dedupe_t_vectors(t_vals, vectors):
+    t_vals = np.asarray(t_vals, dtype=np.float64)
+    vectors = np.asarray(vectors, dtype=np.float64)
+    order = np.argsort(t_vals)
+    t_vals = t_vals[order]
+    vectors = vectors[order]
+    unique_t = []
+    unique_v = []
+    i = 0
+    last_v = None
+    while i < len(t_vals):
+        j = i + 1
+        while j < len(t_vals) and np.isclose(t_vals[j], t_vals[i], atol=1e-6):
+            j += 1
+        ref = vectors[i]
+        block = vectors[i:j].copy()
+        for k in range(block.shape[0]):
+            if np.dot(block[k], ref) < 0:
+                block[k] *= -1.0
+        v = np.mean(block, axis=0)
+        n = np.linalg.norm(v)
+        if n < 1e-12:
+            v = last_v if last_v is not None else np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        else:
+            v = v / n
+        unique_t.append(float(t_vals[i]))
+        unique_v.append(v)
+        last_v = v
+        i = j
+    return np.array(unique_t, dtype=np.float64), np.array(unique_v, dtype=np.float64)
+
+
+def _map_vectors_to_t(t_target, t_src, vectors_src):
+    t_target = np.asarray(t_target, dtype=np.float64)
+    t_src = np.asarray(t_src, dtype=np.float64)
+    vectors_src = np.asarray(vectors_src, dtype=np.float64)
+    if len(t_src) == 0:
+        return np.zeros((len(t_target), 3), dtype=np.float64)
+    idx = np.searchsorted(t_src, t_target, side="right") - 1
+    idx = np.clip(idx, 0, len(t_src) - 1)
+    return vectors_src[idx]
+
+
+def _compute_radius_for_node(points, center, radius_mode, radius_percentile):
+    distances = np.linalg.norm(points - center, axis=1)
+    distances = distances[np.isfinite(distances)]
+    if distances.size == 0:
+        return None
+    if radius_mode == "max":
+        return float(np.max(distances))
+    if radius_mode == "mean":
+        return float(np.mean(distances))
+    if radius_mode == "percentile":
+        return float(np.percentile(distances, radius_percentile))
+    return float(np.median(distances))
+
+
+def _perpendicular_unit(v):
+    v = np.asarray(v, dtype=np.float64)
+    if np.linalg.norm(v) < 1e-12:
+        return np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    if abs(v[0]) < 0.9:
+        other = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    else:
+        other = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    u = np.cross(v, other)
+    n = np.linalg.norm(u)
+    if n < 1e-12:
+        return np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    return u / n
+
+
+def _parallel_transport_frames(points):
+    points = np.asarray(points, dtype=np.float64)
+    n = points.shape[0]
+    if n == 0:
+        return np.zeros((0, 3)), np.zeros((0, 3)), np.zeros((0, 3))
+    # tangents
+    T = np.zeros((n, 3), dtype=np.float64)
+    for i in range(n):
+        if i == 0:
+            tangent = points[1] - points[0] if n > 1 else np.array([0.0, 0.0, 1.0])
+        elif i == n - 1:
+            tangent = points[-1] - points[-2]
+        else:
+            tangent = points[i + 1] - points[i - 1]
+        norm = np.linalg.norm(tangent)
+        if norm < 1e-12:
+            tangent = T[i - 1] if i > 0 else np.array([0.0, 0.0, 1.0])
+            norm = np.linalg.norm(tangent)
+        T[i] = tangent / (norm if norm > 0 else 1.0)
+
+    N = np.zeros_like(T)
+    B = np.zeros_like(T)
+    N[0] = _perpendicular_unit(T[0])
+    B[0] = np.cross(T[0], N[0])
+    for i in range(1, n):
+        t_prev = T[i - 1]
+        t_cur = T[i]
+        v = np.cross(t_prev, t_cur)
+        s = np.linalg.norm(v)
+        if s < 1e-10:
+            n_cur = N[i - 1].copy()
+        else:
+            k = v / s
+            c = np.clip(np.dot(t_prev, t_cur), -1.0, 1.0)
+            theta = np.arctan2(s, c)
+            n_cur = (
+                N[i - 1] * np.cos(theta)
+                + np.cross(k, N[i - 1]) * np.sin(theta)
+                + k * np.dot(k, N[i - 1]) * (1.0 - np.cos(theta))
+            )
+        n_cur = n_cur - np.dot(n_cur, t_cur) * t_cur
+        nn = np.linalg.norm(n_cur)
+        if nn < 1e-12:
+            n_cur = _perpendicular_unit(t_cur)
+        else:
+            n_cur = n_cur / nn
+        N[i] = n_cur
+        B[i] = np.cross(t_cur, n_cur)
+    return T, N, B
+
+
+def _ellipse_axes_from_ring(points, center, n_vec, b_vec, percentile, use_pca=True):
+    points = np.asarray(points, dtype=np.float64)
+    center = np.asarray(center, dtype=np.float64)
+    d = points - center
+    u = d @ n_vec
+    v = d @ b_vec
+    uv = np.stack([u, v], axis=1)
+    if use_pca and uv.shape[0] >= 3:
+        cov = np.cov(uv, rowvar=False)
+        try:
+            evals, evecs = np.linalg.eigh(cov)
+            order = np.argsort(evals)[::-1]
+            evecs = evecs[:, order]
+        except Exception:
+            evecs = np.eye(2)
+    else:
+        evecs = np.eye(2)
+    # ensure right-handed
+    if np.linalg.det(evecs) < 0:
+        evecs[:, 1] *= -1.0
+
+    uv_rot = uv @ evecs
+    a = float(np.percentile(np.abs(uv_rot[:, 0]), percentile))
+    b = float(np.percentile(np.abs(uv_rot[:, 1]), percentile))
+    # rotated axes in 3D
+    axis1 = n_vec * evecs[0, 0] + b_vec * evecs[1, 0]
+    axis2 = n_vec * evecs[0, 1] + b_vec * evecs[1, 1]
+    # normalize
+    axis1 = axis1 / (np.linalg.norm(axis1) + 1e-12)
+    axis2 = axis2 / (np.linalg.norm(axis2) + 1e-12)
+    return a, b, axis1, axis2
+
+
+
+
+def _smooth_radii(t_vals, r_vals, mode, smooth_s):
+    if len(t_vals) < 2:
+        return None
+    if mode == "pchip":
+        return PchipInterpolator(t_vals, r_vals, extrapolate=True)
+    if mode == "spline":
+        return UnivariateSpline(t_vals, r_vals, s=float(smooth_s))
+    return None
+
+
+def _reduce_balanced(items, combine):
+    items = list(items)
+    if not items:
+        return None
+    while len(items) > 1:
+        next_items = []
+        for i in range(0, len(items), 2):
+            if i + 1 < len(items):
+                next_items.append(combine(items[i], items[i + 1]))
+            else:
+                next_items.append(items[i])
+        items = next_items
+    return items[0]
+
+
+def _sample_centerline(nodes, t_nodes, t_samples, smooth, mode):
+    nodes = np.asarray(nodes, dtype=np.float64)
+    t_nodes = np.asarray(t_nodes, dtype=np.float64)
+    t_samples = np.asarray(t_samples, dtype=np.float64)
+    if mode == "spline":
+        tck = create_3d_spline(nodes, smooth)
+        if tck is not None:
+            pts = np.column_stack(splev(t_samples, tck))
+            return pts
+    # fallback: linear in xyz over arc-length t
+    xs = np.interp(t_samples, t_nodes, nodes[:, 0])
+    ys = np.interp(t_samples, t_nodes, nodes[:, 1])
+    zs = np.interp(t_samples, t_nodes, nodes[:, 2])
+    return np.column_stack([xs, ys, zs])
+
+
 def build_loft_polydata(rings, add_caps):
     try:
         import vtk
@@ -297,12 +579,135 @@ def build_loft_mesh(tree, k, params):
     return tri.GetOutput()
 
 
+def build_sweep_sdf(tree, k, params):
+    branches = get_branches(tree, k)
+    if not branches:
+        return None
+
+    radius_mode = params.get("radius_mode", "median")
+    radius_percentile = params.get("radius_percentile", 90)
+    radius_cap = params.get("radius_cap", None)
+    center_mode = params.get("center_mode", "node")
+    spline_samples = int(params.get("spline_samples", 50))
+    fallback_radius = float(params.get("sweep_fallback_radius", params.get("fallback_radius", 0.02)))
+    min_radius = float(params.get("sweep_min_radius", 0.0))
+    smooth_mode = params.get("sweep_radius_smooth", "pchip")
+    smooth_s = float(params.get("sweep_spline_s", 0.0))
+    sweep_samples = int(params.get("sweep_samples", 400))
+    sweep_centerline_mode = params.get("sweep_centerline_mode", "spline")
+    sweep_centerline_smooth = float(params.get("sweep_centerline_smooth", params.get("centerline_smooth", 0.0)))
+    branch_smooth_k = params.get("sweep_branch_smooth_k", 0.0)
+    try:
+        branch_smooth_k = float(branch_smooth_k) if branch_smooth_k is not None else 0.0
+    except Exception:
+        branch_smooth_k = 0.0
+
+    cone_fn, _, sweep_union, _ = get_sweep_primitives_and_union(params)
+
+    vessels = []
+    for branch in branches:
+        nodes = branch[:, :3]
+        splines = branch[:, 3:]
+        if nodes.shape[0] < 2:
+            continue
+
+        t_nodes = _branch_arc_t(nodes)
+        radii = []
+        last_radius = None
+        for coeffs, node in zip(splines, nodes):
+            points = sample_spline_coeffs(coeffs, spline_samples)
+            if points is None or not np.all(np.isfinite(points)):
+                radius = last_radius if last_radius is not None else fallback_radius
+                radii.append(float(radius))
+                last_radius = float(radius)
+                continue
+
+            center = node
+            if center_mode == "centroid":
+                center = np.mean(points, axis=0)
+            radius = _compute_radius_for_node(points, center, radius_mode, radius_percentile)
+            if radius is None or not np.isfinite(radius):
+                radius = last_radius if last_radius is not None else fallback_radius
+            if radius_cap is not None:
+                try:
+                    radius = min(radius, float(radius_cap))
+                except Exception:
+                    pass
+            if min_radius > 0:
+                radius = max(radius, min_radius)
+            radii.append(float(radius))
+            last_radius = float(radius)
+
+        t_u, nodes_u, r_u = _dedupe_t_points(t_nodes, nodes, radii)
+        if len(t_u) < 2:
+            continue
+
+        r_fn = _smooth_radii(t_u, r_u, smooth_mode, smooth_s)
+        samples = max(2, sweep_samples)
+        t_samples = np.linspace(0.0, 1.0, samples)
+
+        # resample centerline along arc-length
+        centers = _sample_centerline(nodes_u, t_u, t_samples, sweep_centerline_smooth, sweep_centerline_mode)
+
+        if r_fn is None:
+            r_samples = np.interp(t_samples, t_u, r_u)
+        else:
+            r_samples = r_fn(t_samples)
+        r_samples = np.asarray(r_samples, dtype=np.float64)
+        if radius_cap is not None:
+            try:
+                r_samples = np.minimum(r_samples, float(radius_cap))
+            except Exception:
+                pass
+        if min_radius > 0:
+            r_samples = np.maximum(r_samples, min_radius)
+        r_samples = np.where(np.isfinite(r_samples), r_samples, fallback_radius)
+
+        segments = []
+        for j in range(len(centers) - 1):
+            p0 = centers[j]
+            p1 = centers[j + 1]
+            r0 = float(r_samples[j])
+            r1 = float(r_samples[j + 1])
+            if r0 <= 0 and r1 <= 0:
+                continue
+            segments.append(cone_fn(p0, p1, r0, r1))
+
+        if segments:
+            if branch_smooth_k > 0:
+                branch_sdf = _reduce_balanced(
+                    segments,
+                    lambda a, b: sweep_union(a, b, k=branch_smooth_k),
+                )
+            else:
+                branch_sdf = union(*segments)
+            if branch_sdf is not None:
+                vessels.append(branch_sdf)
+
+    if not vessels:
+        return None
+
+    k = params.get("smooth_union_k")
+    try:
+        k = float(k) if k is not None else 0.0
+    except Exception:
+        k = 0.0
+
+    if k > 0:
+        return _reduce_balanced(vessels, lambda a, b: sweep_union(a, b, k=k))
+    return union(*vessels)
+
+
 def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
     branches = get_branches(tree, k)
     if not branches:
         return None
 
+    vessel3, vessel3_robust, vessel3_stable = get_sdf_fns(params)
+    smooth_union_fn = get_backend(params).get("smooth_union")
+
     vessels = []
+    debug_sdf = bool(params.get("debug_sdf", False))
     recon_mode = params.get("recon_mode", "legacy")
     if recon_mode not in {"legacy", "stable", "sdf_offset"}:
         recon_mode = "legacy"
@@ -314,9 +719,13 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
     center_mode = params.get("center_mode", "node")
     fallback_radius = params.get("fallback_radius", 0.0)
     spline_samples = int(params.get("spline_samples", 50))
+    centerline_t_mode = params.get("centerline_t_mode", "optimize")
     for branch in branches:
         nodes = branch[:, :3]
         splines = branch[:, 3:]
+        if debug_sdf:
+            print("NODES min/max:", np.nanmin(nodes, axis=0), np.nanmax(nodes, axis=0))
+            print("NODES finite:", np.all(np.isfinite(nodes)))
         centerline_nodes = nodes
         if recon_mode == "sdf_offset":
             centers = []
@@ -346,24 +755,489 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
             )
             if "tck" in inspect.signature(vessel3_stable).parameters:
                 stable_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
+            if "centerline_t_mode" in inspect.signature(vessel3_stable).parameters:
+                stable_kwargs.update(centerline_t_mode=centerline_t_mode)
             vessels.append(vessel3_stable(sampled, centers_for_radius, splines, **stable_kwargs))
         else:
             if legacy_variant == "robust":
                 robust_kwargs = {}
                 if "tck" in inspect.signature(vessel3_robust).parameters:
                     robust_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
+                if "centerline_t_mode" in inspect.signature(vessel3_robust).parameters:
+                    robust_kwargs.update(centerline_t_mode=centerline_t_mode)
+                if "fallback_radius" in inspect.signature(vessel3_robust).parameters:
+                    robust_kwargs.update(fallback_radius=params.get("robust_fallback_radius", 0.02))
+                if "min_radius" in inspect.signature(vessel3_robust).parameters:
+                    robust_kwargs.update(min_radius=params.get("robust_min_radius", 0.005))
+                if "radius_cap" in inspect.signature(vessel3_robust).parameters:
+                    robust_kwargs.update(radius_cap=params.get("radius_cap", None))
+                if "sanity_percentile" in inspect.signature(vessel3_robust).parameters:
+                    robust_kwargs.update(
+                        sanity_percentile=params.get("robust_sanity_percentile", 95),
+                        sanity_threshold=params.get("robust_sanity_threshold", None),
+                    )
+                if "debug" in inspect.signature(vessel3_robust).parameters:
+                    robust_kwargs.update(
+                        debug=debug_sdf,
+                        debug_scalar_threshold=params.get("robust_debug_scalar_threshold", 10.0),
+                    )
                 vessels.append(vessel3_robust(sampled, nodes, splines, **robust_kwargs))
             else:
                 legacy_kwargs = {}
                 if "tck" in inspect.signature(vessel3).parameters:
                     legacy_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
+                if "centerline_t_mode" in inspect.signature(vessel3).parameters:
+                    legacy_kwargs.update(centerline_t_mode=centerline_t_mode)
                 vessels.append(vessel3(sampled, nodes, splines, **legacy_kwargs))
 
     if not vessels:
         return None
     if len(vessels) == 1:
         return vessels[0]
+
+    k = params.get("smooth_union_k")
+    try:
+        k = float(k) if k is not None else 0.0
+    except Exception:
+        k = 0.0
+
+    out = vessels[0]
+    for v in vessels[1:]:
+        if k > 0 and smooth_union_fn is not None:
+            out = smooth_union_fn(out, v, k=k)
+        else:
+            out = union(out, v)
+    return out
+
+
+def build_sweep_ellipse_sdf(tree, k, params):
+    branches = get_branches(tree, k)
+    if not branches:
+        return None
+
+    radius_percentile = float(params.get("radius_percentile", 90))
+    radius_cap = params.get("radius_cap", None)
+    center_mode = params.get("center_mode", "node")
+    spline_samples = int(params.get("spline_samples", 50))
+    fallback_radius = float(params.get("sweep_fallback_radius", params.get("fallback_radius", 0.02)))
+    min_radius = float(params.get("sweep_min_radius", 0.0))
+    smooth_mode = params.get("sweep_radius_smooth", "pchip")
+    smooth_s = float(params.get("sweep_spline_s", 0.0))
+    sweep_samples = int(params.get("sweep_samples", 400))
+    sweep_centerline_mode = params.get("sweep_centerline_mode", "spline")
+    sweep_centerline_smooth = float(params.get("sweep_centerline_smooth", params.get("centerline_smooth", 0.0)))
+    branch_smooth_k = params.get("sweep_branch_smooth_k", 0.0)
+    use_pca = bool(params.get("sweep_ellipse_use_pca", True))
+    try:
+        branch_smooth_k = float(branch_smooth_k) if branch_smooth_k is not None else 0.0
+    except Exception:
+        branch_smooth_k = 0.0
+
+    _, ellipse_fn, sweep_union, _ = get_sweep_primitives_and_union(params)
+
+    vessels = []
+    for branch in branches:
+        nodes = branch[:, :3]
+        splines = branch[:, 3:]
+        if nodes.shape[0] < 2:
+            continue
+        # drop zero-length steps
+        if nodes.shape[0] > 2:
+            seg = np.linalg.norm(np.diff(nodes, axis=0), axis=1)
+            keep = np.concatenate([[True], seg > 1e-6])
+            nodes = nodes[keep]
+            splines = splines[keep]
+        if nodes.shape[0] < 2:
+            continue
+
+        t_nodes = _branch_arc_t(nodes)
+        T, N, B = _parallel_transport_frames(nodes)
+
+        a_list = []
+        b_list = []
+        axis1_list = []
+        axis2_list = []
+        last_a = None
+        last_b = None
+        for i, (coeffs, node) in enumerate(zip(splines, nodes)):
+            ring = sample_spline_coeffs(coeffs, spline_samples)
+            if ring is None or not np.all(np.isfinite(ring)):
+                a = last_a if last_a is not None else fallback_radius
+                b = last_b if last_b is not None else fallback_radius
+                axis1 = N[i]
+                axis2 = B[i]
+            else:
+                center = node
+                if center_mode == "centroid":
+                    center = np.mean(ring, axis=0)
+                a, b, axis1, axis2 = _ellipse_axes_from_ring(
+                    ring, center, N[i], B[i], radius_percentile, use_pca=use_pca
+                )
+            if radius_cap is not None:
+                try:
+                    cap = float(radius_cap)
+                    a = min(a, cap)
+                    b = min(b, cap)
+                except Exception:
+                    pass
+            if min_radius > 0:
+                a = max(a, min_radius)
+                b = max(b, min_radius)
+            a_list.append(float(a))
+            b_list.append(float(b))
+            axis1_list.append(axis1)
+            axis2_list.append(axis2)
+            last_a, last_b = float(a), float(b)
+
+        if len(a_list) < 2:
+            continue
+
+        # smooth a(t), b(t)
+        t_u, nodes_u, a_u = _dedupe_t_points(t_nodes, nodes, a_list)
+        t_u, _, b_u = _dedupe_t_points(t_nodes, nodes, b_list)
+        t_axis1, axis1_u = _dedupe_t_vectors(t_nodes, axis1_list)
+        t_axis2, axis2_u = _dedupe_t_vectors(t_nodes, axis2_list)
+        axis1_u = _map_vectors_to_t(t_u, t_axis1, axis1_u)
+        axis2_u = _map_vectors_to_t(t_u, t_axis2, axis2_u)
+        if len(t_u) < 2:
+            continue
+
+        a_fn = _smooth_radii(t_u, a_u, smooth_mode, smooth_s)
+        b_fn = _smooth_radii(t_u, b_u, smooth_mode, smooth_s)
+
+        samples = max(2, sweep_samples)
+        t_samples = np.linspace(0.0, 1.0, samples)
+
+        centers = _sample_centerline(nodes_u, t_u, t_samples, sweep_centerline_smooth, sweep_centerline_mode)
+
+        if a_fn is None:
+            a_samples = np.interp(t_samples, t_u, a_u)
+        else:
+            a_samples = a_fn(t_samples)
+        if b_fn is None:
+            b_samples = np.interp(t_samples, t_u, b_u)
+        else:
+            b_samples = b_fn(t_samples)
+        a_samples = np.asarray(a_samples, dtype=np.float64)
+        b_samples = np.asarray(b_samples, dtype=np.float64)
+        if radius_cap is not None:
+            try:
+                cap = float(radius_cap)
+                a_samples = np.minimum(a_samples, cap)
+                b_samples = np.minimum(b_samples, cap)
+            except Exception:
+                pass
+        if min_radius > 0:
+            a_samples = np.maximum(a_samples, min_radius)
+            b_samples = np.maximum(b_samples, min_radius)
+        a_samples = np.where(np.isfinite(a_samples), a_samples, fallback_radius)
+        b_samples = np.where(np.isfinite(b_samples), b_samples, fallback_radius)
+
+        # orientation per segment from nearest node
+        seg_idx = np.searchsorted(t_u, t_samples[:-1], side="right") - 1
+        seg_idx = np.clip(seg_idx, 0, len(axis1_u) - 1)
+
+        segments = []
+        for j in range(len(centers) - 1):
+            p0 = centers[j]
+            p1 = centers[j + 1]
+            a0 = float(a_samples[j])
+            b0 = float(b_samples[j])
+            a1 = float(a_samples[j + 1])
+            b1 = float(b_samples[j + 1])
+            if a0 <= 0 and b0 <= 0 and a1 <= 0 and b1 <= 0:
+                continue
+            axis1 = axis1_u[seg_idx[j]]
+            axis2 = axis2_u[seg_idx[j]]
+            segments.append(ellipse_fn(p0, p1, a0, b0, a1, b1, axis1, axis2))
+
+        if segments:
+            if branch_smooth_k > 0:
+                branch_sdf = _reduce_balanced(
+                    segments, lambda a, b: sweep_union(a, b, k=branch_smooth_k)
+                )
+            else:
+                branch_sdf = union(*segments)
+            if branch_sdf is not None:
+                vessels.append(branch_sdf)
+
+    if not vessels:
+        return None
+
+    k = params.get("smooth_union_k")
+    try:
+        k = float(k) if k is not None else 0.0
+    except Exception:
+        k = 0.0
+    if k > 0:
+        return _reduce_balanced(vessels, lambda a, b: sweep_union(a, b, k=k))
     return union(*vessels)
+
+
+def build_sweep_fast_sdf(tree, k, params, ellipse=False):
+    branches = get_branches(tree, k)
+    if not branches:
+        return None
+
+    # sweep params
+    radius_mode = params.get("radius_mode", "median")
+    radius_percentile = float(params.get("radius_percentile", 90))
+    radius_cap = params.get("radius_cap", None)
+    center_mode = params.get("center_mode", "node")
+    spline_samples = int(params.get("spline_samples", 50))
+    fallback_radius = float(params.get("sweep_fallback_radius", params.get("fallback_radius", 0.02)))
+    min_radius = float(params.get("sweep_min_radius", 0.0))
+    sweep_samples = int(params.get("sweep_samples", 400))
+    sweep_centerline_mode = params.get("sweep_centerline_mode", "spline")
+    sweep_centerline_smooth = float(params.get("sweep_centerline_smooth", params.get("centerline_smooth", 0.0)))
+    smooth_mode = params.get("sweep_radius_smooth", "pchip")
+    smooth_s = float(params.get("sweep_spline_s", 0.0))
+    use_pca = bool(params.get("sweep_ellipse_use_pca", True))
+    seg_batch = int(params.get("sweep_segment_batch", 256))
+    _, _, _, sdf3_backend = get_sweep_primitives_and_union(params)
+    if sdf3_backend is None:
+        raise RuntimeError("Backend missing sdf3 decorator.")
+
+    # collect segment data across all branches
+    P0 = []
+    P1 = []
+    R0 = []
+    R1 = []
+    A0 = []
+    B0 = []
+    A1 = []
+    B1 = []
+    N0 = []
+    B0v = []
+
+    for branch in branches:
+        nodes = branch[:, :3]
+        splines = branch[:, 3:]
+        if nodes.shape[0] < 2:
+            continue
+
+        # drop zero-length steps
+        if nodes.shape[0] > 2:
+            seg = np.linalg.norm(np.diff(nodes, axis=0), axis=1)
+            keep = np.concatenate([[True], seg > 1e-6])
+            nodes = nodes[keep]
+            splines = splines[keep]
+        if nodes.shape[0] < 2:
+            continue
+
+        t_nodes = _branch_arc_t(nodes)
+        T, N, B = _parallel_transport_frames(nodes)
+
+        if ellipse:
+            a_list = []
+            b_list = []
+            axis1_list = []
+            axis2_list = []
+            last_a = None
+            last_b = None
+            for i, (coeffs, node) in enumerate(zip(splines, nodes)):
+                ring = sample_spline_coeffs(coeffs, spline_samples)
+                if ring is None or not np.all(np.isfinite(ring)):
+                    a = last_a if last_a is not None else fallback_radius
+                    b = last_b if last_b is not None else fallback_radius
+                    axis1 = N[i]
+                    axis2 = B[i]
+                else:
+                    center = node
+                    if center_mode == "centroid":
+                        center = np.mean(ring, axis=0)
+                    a, b, axis1, axis2 = _ellipse_axes_from_ring(
+                        ring, center, N[i], B[i], radius_percentile, use_pca=use_pca
+                    )
+                if radius_cap is not None:
+                    try:
+                        cap = float(radius_cap)
+                        a = min(a, cap)
+                        b = min(b, cap)
+                    except Exception:
+                        pass
+                if min_radius > 0:
+                    a = max(a, min_radius)
+                    b = max(b, min_radius)
+                a_list.append(float(a))
+                b_list.append(float(b))
+                axis1_list.append(axis1)
+                axis2_list.append(axis2)
+                last_a, last_b = float(a), float(b)
+
+            if len(a_list) < 2:
+                continue
+
+            t_u, nodes_u, a_u = _dedupe_t_points(t_nodes, nodes, a_list)
+            t_u, _, b_u = _dedupe_t_points(t_nodes, nodes, b_list)
+            t_axis1, axis1_u = _dedupe_t_vectors(t_nodes, axis1_list)
+            t_axis2, axis2_u = _dedupe_t_vectors(t_nodes, axis2_list)
+            axis1_u = _map_vectors_to_t(t_u, t_axis1, axis1_u)
+            axis2_u = _map_vectors_to_t(t_u, t_axis2, axis2_u)
+            if len(t_u) < 2:
+                continue
+
+            a_fn = _smooth_radii(t_u, a_u, smooth_mode, smooth_s)
+            b_fn = _smooth_radii(t_u, b_u, smooth_mode, smooth_s)
+
+            t_samples = np.linspace(0.0, 1.0, max(2, sweep_samples))
+            centers = _sample_centerline(nodes_u, t_u, t_samples, sweep_centerline_smooth, sweep_centerline_mode)
+
+            a_samples = np.interp(t_samples, t_u, a_u) if a_fn is None else a_fn(t_samples)
+            b_samples = np.interp(t_samples, t_u, b_u) if b_fn is None else b_fn(t_samples)
+            a_samples = np.asarray(a_samples, dtype=np.float64)
+            b_samples = np.asarray(b_samples, dtype=np.float64)
+            if radius_cap is not None:
+                try:
+                    cap = float(radius_cap)
+                    a_samples = np.minimum(a_samples, cap)
+                    b_samples = np.minimum(b_samples, cap)
+                except Exception:
+                    pass
+            if min_radius > 0:
+                a_samples = np.maximum(a_samples, min_radius)
+                b_samples = np.maximum(b_samples, min_radius)
+
+            seg_idx = np.searchsorted(t_u, t_samples[:-1], side="right") - 1
+            seg_idx = np.clip(seg_idx, 0, len(axis1_u) - 1)
+            for j in range(len(centers) - 1):
+                P0.append(centers[j])
+                P1.append(centers[j + 1])
+                A0.append(float(a_samples[j]))
+                B0.append(float(b_samples[j]))
+                A1.append(float(a_samples[j + 1]))
+                B1.append(float(b_samples[j + 1]))
+                N0.append(axis1_u[seg_idx[j]])
+                B0v.append(axis2_u[seg_idx[j]])
+
+        else:
+            radii = []
+            last_radius = None
+            for coeffs, node in zip(splines, nodes):
+                points = sample_spline_coeffs(coeffs, spline_samples)
+                if points is None or not np.all(np.isfinite(points)):
+                    radius = last_radius if last_radius is not None else fallback_radius
+                    radii.append(float(radius))
+                    last_radius = float(radius)
+                    continue
+
+                center = node
+                if center_mode == "centroid":
+                    center = np.mean(points, axis=0)
+                radius = _compute_radius_for_node(points, center, radius_mode, radius_percentile)
+                if radius is None or not np.isfinite(radius):
+                    radius = last_radius if last_radius is not None else fallback_radius
+                if radius_cap is not None:
+                    try:
+                        radius = min(radius, float(radius_cap))
+                    except Exception:
+                        pass
+                if min_radius > 0:
+                    radius = max(radius, min_radius)
+                radii.append(float(radius))
+                last_radius = float(radius)
+
+            t_u, nodes_u, r_u = _dedupe_t_points(t_nodes, nodes, radii)
+            if len(t_u) < 2:
+                continue
+            r_fn = _smooth_radii(t_u, r_u, smooth_mode, smooth_s)
+            t_samples = np.linspace(0.0, 1.0, max(2, sweep_samples))
+            centers = _sample_centerline(nodes_u, t_u, t_samples, sweep_centerline_smooth, sweep_centerline_mode)
+            r_samples = np.interp(t_samples, t_u, r_u) if r_fn is None else r_fn(t_samples)
+            r_samples = np.asarray(r_samples, dtype=np.float64)
+            if radius_cap is not None:
+                try:
+                    r_samples = np.minimum(r_samples, float(radius_cap))
+                except Exception:
+                    pass
+            if min_radius > 0:
+                r_samples = np.maximum(r_samples, min_radius)
+
+            for j in range(len(centers) - 1):
+                P0.append(centers[j])
+                P1.append(centers[j + 1])
+                R0.append(float(r_samples[j]))
+                R1.append(float(r_samples[j + 1]))
+
+    if not P0:
+        return None
+
+    P0 = np.asarray(P0, dtype=np.float64)
+    P1 = np.asarray(P1, dtype=np.float64)
+    seg_v = P1 - P0
+    seg_vv = np.sum(seg_v * seg_v, axis=1)
+    seg_vv = np.where(seg_vv < 1e-12, 1e-12, seg_vv)
+
+    if ellipse:
+        A0 = np.asarray(A0, dtype=np.float64)
+        B0 = np.asarray(B0, dtype=np.float64)
+        A1 = np.asarray(A1, dtype=np.float64)
+        B1 = np.asarray(B1, dtype=np.float64)
+        N0 = np.asarray(N0, dtype=np.float64)
+        B0v = np.asarray(B0v, dtype=np.float64)
+    else:
+        R0 = np.asarray(R0, dtype=np.float64)
+        R1 = np.asarray(R1, dtype=np.float64)
+
+    def _fast_sweep():
+        def f(P):
+            if P.ndim == 1:
+                P = P[np.newaxis, :]
+            Np = P.shape[0]
+            best = np.full((Np,), np.inf, dtype=np.float64)
+            for i0 in range(0, len(P0), seg_batch):
+                i1 = min(i0 + seg_batch, len(P0))
+                p0 = P0[i0:i1]
+                v = seg_v[i0:i1]
+                vv = seg_vv[i0:i1]
+                pa = P[:, None, :] - p0[None, :, :]
+                s = np.sum(pa * v[None, :, :], axis=2) / vv[None, :]
+                s = np.clip(s, 0.0, 1.0)
+                c = p0[None, :, :] + s[:, :, None] * v[None, :, :]
+                d = P[:, None, :] - c
+
+                if ellipse:
+                    a0 = A0[i0:i1][None, :]
+                    b0 = B0[i0:i1][None, :]
+                    a1 = A1[i0:i1][None, :]
+                    b1 = B1[i0:i1][None, :]
+                    n = N0[i0:i1][None, :, :]
+                    bb = B0v[i0:i1][None, :, :]
+                    a = (1.0 - s) * a0 + s * a1
+                    b = (1.0 - s) * b0 + s * b1
+                    a = np.maximum(a, 1e-6)
+                    b = np.maximum(b, 1e-6)
+                    x = np.sum(d * n, axis=2)
+                    y = np.sum(d * bb, axis=2)
+                    q = (x / a) ** 2 + (y / b) ** 2
+                    sdf = (q - 1.0) * np.minimum(a, b)
+                else:
+                    r0 = R0[i0:i1][None, :]
+                    r1 = R1[i0:i1][None, :]
+                    r = (1.0 - s) * r0 + s * r1
+                    dist = np.linalg.norm(d, axis=2)
+                    sdf = dist - r
+                best = np.minimum(best, np.min(sdf, axis=1))
+            return best.astype(np.float32)
+
+        return f
+
+    return sdf3_backend(_fast_sweep)()
+
+
+def compute_centerline_bounds(tree, k, pad_ratio=0.1, pad_abs=None):
+    branches = get_branches(tree, k)
+    if not branches:
+        return None
+    nodes = np.vstack([b[:, :3] for b in branches])
+    mins = np.nanmin(nodes, axis=0)
+    maxs = np.nanmax(nodes, axis=0)
+    size = maxs - mins
+    if pad_abs is not None:
+        pad = np.array([float(pad_abs)] * 3, dtype=np.float32)
+    else:
+        pad = size * float(pad_ratio)
+    return (mins - pad, maxs + pad)
 
 
 def parse_int(value, default):
@@ -384,10 +1258,15 @@ def process_file(path, output_dir, params):
     overwrite = bool(params.get("overwrite", False))
     centerline_samples = int(params.get("centerline_samples", 100))
     centerline_smooth = float(params.get("centerline_smooth", 0.0))
+    centerline_t_mode = params.get("centerline_t_mode", "optimize")
     samples_coarse = parse_int(params.get("samples_coarse"), 32)
     samples_fine = parse_int(params.get("samples_fine"), 262144)
     sparse = bool(params.get("sparse", True))
     use_bounds = bool(params.get("use_bounds", True))
+    sdf_verbose = bool(params.get("sdf_verbose", True))
+    bounds_mode = params.get("bounds_mode", "auto")  # auto | centerline
+    bounds_pad_ratio = params.get("bounds_pad_ratio", 0.1)
+    bounds_pad_abs = params.get("bounds_pad_abs")
     save_centerline = bool(params.get("save_centerline", False))
     centerline_out_dir = params.get("centerline_output_dir") or output_dir
     centerline_suffix = params.get("centerline_suffix", "_centerline.npy")
@@ -403,7 +1282,7 @@ def process_file(path, output_dir, params):
     serial = list(data.flatten())
     tree = deserialize(serial, mode=mode, k=k)
     recon_mode = params.get("recon_mode", "legacy")
-    if recon_mode not in {"legacy", "stable", "sdf_offset", "loft"}:
+    if recon_mode not in {"legacy", "stable", "sdf_offset", "loft", "sweep", "sweep_ellipse", "sweep_fast", "sweep_ellipse_fast"}:
         recon_mode = "legacy"
 
     base = os.path.splitext(os.path.basename(path))[0]
@@ -529,15 +1408,33 @@ def process_file(path, output_dir, params):
         writer.SetInputData(mesh)
         writer.Write()
     else:
-        sdf_obj = build_sdf(tree, k, centerline_samples, centerline_smooth, params)
+        if recon_mode == "sweep":
+            sdf_obj = build_sweep_sdf(tree, k, params)
+        elif recon_mode == "sweep_ellipse":
+            sdf_obj = build_sweep_ellipse_sdf(tree, k, params)
+        elif recon_mode == "sweep_fast":
+            sdf_obj = build_sweep_fast_sdf(tree, k, params, ellipse=False)
+        elif recon_mode == "sweep_ellipse_fast":
+            sdf_obj = build_sweep_fast_sdf(tree, k, params, ellipse=True)
+        else:
+            sdf_obj = build_sdf(tree, k, centerline_samples, centerline_smooth, params)
         if sdf_obj is None:
             return "skip", None
-        bounds = sdf_obj.save(out_path, samples=samples_coarse, sparse=sparse)
+        bounds = None
+        if bounds_mode == "centerline":
+            bounds = compute_centerline_bounds(tree, k, pad_ratio=bounds_pad_ratio, pad_abs=bounds_pad_abs)
+        if sdf_verbose:
+            print("SDF pass: coarse")
+        bounds = sdf_obj.save(out_path, samples=samples_coarse, sparse=sparse, bounds=bounds, verbose=sdf_verbose)
         if samples_fine:
             if use_bounds:
-                sdf_obj.save(out_path, samples=samples_fine, bounds=bounds, sparse=sparse)
+                if sdf_verbose:
+                    print("SDF pass: fine")
+                sdf_obj.save(out_path, samples=samples_fine, bounds=bounds, sparse=sparse, verbose=sdf_verbose)
             else:
-                sdf_obj.save(out_path, samples=samples_fine, sparse=sparse)
+                if sdf_verbose:
+                    print("SDF pass: fine")
+                sdf_obj.save(out_path, samples=samples_fine, sparse=sparse, verbose=sdf_verbose)
     return "ok", out_path
 
 
@@ -583,6 +1480,7 @@ def main():
     max_files = params.get("max_files")
     preview = bool(params.get("preview", False))
     preview_max = params.get("preview_max")
+    file_progress = bool(params.get("file_progress", True))
 
     if not input_path or not output_dir:
         raise SystemExit("Error: --input and --output-dir are required (or provide them in config).")
@@ -593,6 +1491,7 @@ def main():
 
     total = len(files)
     written = 0
+    bar = sdf_progress.Bar(total, enabled=file_progress) if file_progress else None
     for idx, path in enumerate(files, start=1):
         status, out_path = process_file(path, output_dir, params)
         if status == "ok":
@@ -603,7 +1502,11 @@ def main():
                     preview_mesh(out_path, params)
         else:
             print(f"[{idx}/{total}] skipped {os.path.basename(path)}")
+        if bar:
+            bar.increment(1)
 
+    if bar:
+        bar.done()
     print(f"done: {written}/{total} written")
 
 

@@ -5,7 +5,7 @@ paths:
   raw_root: '/home/sukin707/VesselGPT/DemoData1'
 
   # Root folder where all outputs will be created.
-  output_root: 'DemoOutput1'
+  output_root: 'DemoOutput2'
 
   # Optional overrides (uncomment to customize individual paths)
   # raw_meshes: ../modelsRaw
@@ -24,7 +24,7 @@ paths:
   # trees_splines: ../modelsNormalizado/TreesSplines
 
 params:
-  resample_epsilon: 0.007
+  resample_epsilon: 0.001
   vmtk_script: vmtknetworkextraction -advancementratio 1.05
   normalize_overwrite: false
   spline_fit_mode: robust

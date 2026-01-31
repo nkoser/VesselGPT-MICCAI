@@ -85,6 +85,18 @@ def op32(f):
     return wrapper
 
 
+@op3
+def smooth_union(a, b, k=0.05):
+    def f(p):
+        d1 = a(p).reshape(-1)
+        d2 = b(p).reshape(-1)
+        k_ = float(k)
+        h = np.clip(0.5 + 0.5 * (d2 - d1) / k_, 0.0, 1.0)
+        d = d2 * (1.0 - h) + d1 * h - k_ * h * (1.0 - h)
+        return d.reshape((-1, 1))
+    return f
+
+
 # Helpers
 
 def _length(a):
@@ -262,9 +274,10 @@ def calculate_angle(a, b, p):
     ##version martin submission
     ba = b - a
     pa = p - a
-
-    ba_norm = ba / np.linalg.norm(ba)
-    if np.linalg.norm(ba) == 0: return None
+    ba_len = np.linalg.norm(ba)
+    if ba_len == 0:
+        return None
+    ba_norm = ba / ba_len
 
     pa_proj = pa - (np.dot(pa, ba_norm).reshape((-1, 1)) * ba_norm)
 
@@ -277,6 +290,8 @@ def calculate_angle(a, b, p):
     x_proj = np.dot(pa_proj, u)
     y_proj = np.dot(pa_proj, v)
     angle = np.arctan2(y_proj, x_proj)
+    if not np.isfinite(angle).all():
+        return None
 
     # Normalize angle to [0, 1]
     normalized_angle = (angle + np.pi) / (2 * np.pi)
@@ -320,7 +335,7 @@ def sample_spline(coeffs, n_samples):
 
 
 @sdf3
-def vessel3(tree_points, points, splines, tck=None, sampled_spline=None, t_values=None):
+def vessel3(tree_points, points, splines, tck=None, sampled_spline=None, t_values=None, centerline_t_mode="optimize"):
     """
     Original legacy implementation (kept for compatibility).
     Uses polyfit on sampled contours and radius interpolation.
@@ -388,8 +403,12 @@ def vessel3(tree_points, points, splines, tck=None, sampled_spline=None, t_value
         xs = np.linspace(0, 1, 50)
         coeff = np.polyfit(xs, distances, 5)
 
-        t = minimize_scalar(distance_to_spline, bounds=(0, 1), args=(center,),
-                            method='bounded').x  ###esta linea es lenta
+        if centerline_t_mode == "kdtree":
+            _, idx = kdtree.query(center)
+            t = float(t_values[idx])
+        else:
+            t = minimize_scalar(distance_to_spline, bounds=(0, 1), args=(center,),
+                                method='bounded').x
         # _, nearest_idx = kdtree.query(center)
         # Compute the corresponding parameter t
         # t = nearest_idx / len(sampled_spline)
@@ -461,7 +480,7 @@ def vessel3(tree_points, points, splines, tck=None, sampled_spline=None, t_value
 
 
 @sdf3
-def vessel3_robust(tree_points, points, splines, tck=None, sampled_spline=None, t_values=None):
+def vessel3_robust(tree_points, points, splines, tck=None, sampled_spline=None, t_values=None, centerline_t_mode="optimize"):
     """
     Safer variant of legacy:
     - angle-binned radius tables (avoids polyfit overshoot)
@@ -580,7 +599,11 @@ def vessel3_robust(tree_points, points, splines, tck=None, sampled_spline=None, 
                 # degenerate root: create a tiny circle
                 spline_points = np.repeat(center[np.newaxis, :], n_profile_samples, axis=0)
 
-        t = minimize_scalar(distance_to_spline, bounds=(0, 1), args=(center,), method="bounded").x
+        if centerline_t_mode == "kdtree":
+            _, idx = kdtree.query(center)
+            t = float(t_values[idx])
+        else:
+            t = minimize_scalar(distance_to_spline, bounds=(0, 1), args=(center,), method="bounded").x
         if i == len(points) - 1:
             t = 1.0
 
@@ -671,6 +694,7 @@ def vessel3_stable(
     tck=None,
     sampled_spline=None,
     t_values=None,
+    centerline_t_mode="optimize",
 ):
     """
     Stable variant of vessel3:
@@ -739,7 +763,11 @@ def vessel3_stable(
 
         splines_sampled.append(spline_points.copy() if spline_points is not None else None)
 
-        t = minimize_scalar(distance_to_spline, bounds=(0, 1), args=(center,), method="bounded").x
+        if centerline_t_mode == "kdtree":
+            _, idx = kdtree.query(center)
+            t = float(t_values[idx])
+        else:
+            t = minimize_scalar(distance_to_spline, bounds=(0, 1), args=(center,), method="bounded").x
         if i == len(points) - 1:
             t = 1.0
         coeffs.append((t, coeff))

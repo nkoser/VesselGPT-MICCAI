@@ -1,51 +1,98 @@
 # Mesh reconstruction config
 
 paths:
-  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines
-  output_dir: /home/sukin707/VesselGPT/MeshOutput1
+  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput2/TreesSplines
+  output_dir: /home/sukin707/VesselGPT/MeshOutput2
 
 params:
+  # Global (applies to all recon_mode)
   k: 39
   mode: post_order
   pattern: "*.npy"
   max_files: null
 
-  # Reconstruction mode: legacy (notebook), stable (robust radii),
-  # sdf_offset (centerline shifted to contour centroids), or loft (VTK surface)
-  recon_mode: stable
-  # For recon_mode=legacy: choose the implementation
+  # Global: Reconstruction mode
+  # legacy (notebook), stable (robust radii),
+  # sdf_offset (centerline shifted to contour centroids),
+  # sweep (branch-local capsule sweep),
+  # sweep_ellipse (branch-local elliptical sweep),
+  # sweep_fast (vectorized capsule sweep),
+  # sweep_ellipse_fast (vectorized elliptical sweep), or loft (VTK surface)
+  recon_mode: loft
+  # SDF-only (legacy/stable/robust/sdf_offset): implementation variant
+  # Sweep modes ignore this and always use sdf.d3_fast.
+  sdf_variant: fast
+  # legacy-only: choose the implementation
   #   original -> matches notebook / polyfit radius
   #   robust   -> angle-binned radius, safer but not identical
-  legacy_variant: original
-  radius_mode: percentile    # median | percentile | mean | max
-  radius_percentile: 90
-  radius_cap: null           # e.g. 0.25 to clamp oversized bulges
-  center_mode: centroid      # node | centroid
-  fallback_radius: 0.0
-  spline_samples: 50         # samples per spline for centroid/loft
+  legacy_variant: robust
 
-  # Output format: ".stl" | ".vtp" | ".ply" (VTK writers)
-  output_ext: ".stl"
+  # robust-only: fallback radii + sanity checks
+  robust_fallback_radius: 0.01
+  robust_min_radius: 0.01
+  robust_sanity_percentile: 90
+  robust_sanity_threshold: 0.5
+  # SDF-only (stable/robust/legacy): radius estimation mode
+  radius_mode: median    # median | percentile | mean | max
+  radius_percentile: 75
+  # SDF-only: clamp for oversized bulges (used by stable; robust uses if supported)
+  radius_cap: 0.1 #0.25 #null
+  # SDF-only: how to pick cross-section center
+  center_mode: centroid      # node | centroid
+  # stable-only: fallback radius when samples are invalid
+  fallback_radius: 0.01 #0.0
+  # SDF/loft: samples per spline for centroid/loft
+  spline_samples: 64         # samples per spline for centroid/loft
+
+  # sweep-only: branch-local sweep settings
+  sweep_samples: 400
+  sweep_radius_smooth: pchip #pchip    # pchip | spline | none
+  sweep_spline_s: 0.0
+  sweep_branch_smooth_k: 0.0
+  sweep_fallback_radius: 0.02
+  sweep_min_radius: 0.0
+  sweep_ellipse_use_pca: true
+  sweep_centerline_mode: spline  # spline | linear
+  sweep_centerline_smooth: 0.0
+  sweep_segment_batch: 256
+
+  # Global output format: ".stl" | ".vtp" | ".ply" (VTK writers)
+  output_ext: ".vtp"
   overwrite: true
 
-  # Centerline spline used to build the SDF vessel
-  centerline_samples: 400
+  # SDF-only: centerline spline used to build the vessel SDF
+  centerline_samples: 200
   centerline_smooth: 0.0
+  # How to map node->centerline parameter t (optimize = exact, kdtree = fast)
+  centerline_t_mode: optimize #kdtree
 
-  # SDF sampling (coarse -> fine)
-  samples_coarse: 32    # 2**5
-  samples_fine: 524288  # 2**19
+  # SDF-only: sampling (coarse -> fine)
+  samples_coarse: 256    # 2**5
+  samples_fine:  524288 #1048576 #8388608 #524288  # 2**19
   sparse: false
   use_bounds: true
+  sdf_verbose: true
+  file_progress: true
 
-  # Loft settings (VTK only)
+  # SDF-only: bounds strategy (auto = estimate from SDF, centerline = use tree nodes)
+  bounds_mode: centerline #centerline
+  bounds_pad_ratio: 0.02
+  bounds_pad_abs: null
+  # SDF-only: smooth union between branches (helps thinning at bifurcations)
+  smooth_union_k: 0.0
+  # SDF-only: debug prints (bounds + robust radius)
+  debug_sdf: true
+  # robust-only: debug print threshold for large scalar radii
+  robust_debug_scalar_threshold: 10.0
+
+  # loft-only (VTK): surface settings
   loft_caps: false
   loft_align: true
   loft_allow_flip: true
   loft_clean: true
   loft_min_radius: 0.0
 
-  # Optional: save resampled centerlines (per branch, columns = x,y,z,branch_id)
+  # Optional: save resampled centerlines (SDF-only)
   save_centerline: False
   centerline_output_dir: /home/sukin707/VesselGPT/MeshOutput1/centerlines
   centerline_suffix: "_centerline.stl"
@@ -56,7 +103,7 @@ params:
   centerline_mode: edges
   centerline_edge_samples: 2
 
-  # Optional preview (requires pyvista)
+  # Optional preview (requires pyvista, SDF-only)
   preview: false
   preview_max: 1
   preview_offscreen: true
