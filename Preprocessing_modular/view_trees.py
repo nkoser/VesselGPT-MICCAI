@@ -12,9 +12,10 @@ except Exception as exc:
 import matplotlib.pyplot as plt
 
 try:
-    from scipy.interpolate import splev
+    from scipy.interpolate import splev, splprep
 except Exception:
     splev = None
+    splprep = None
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in os.sys.path:
@@ -64,6 +65,20 @@ def collect_nodes_edges(node, nodes, edges):
         edges.append((idx, right_idx))
 
     return idx
+
+
+def collect_branches(node, path, branches):
+    if node is None:
+        return
+    path.append(node)
+    if node.left is None and node.right is None:
+        branches.append(path[:])
+    else:
+        if node.left:
+            collect_branches(node.left, path, branches)
+        if node.right:
+            collect_branches(node.right, path, branches)
+    path.pop()
 
 
 def radius_from_node(node, k, radius_mode, radius_fixed):
@@ -159,9 +174,12 @@ def draw_splines(ax, nodes, root_pos, params, normalize_xyz):
         raise RuntimeError("scipy is required for spline visualization.")
     n_samples = int(params.get("spline_samples", 50))
     color = params.get("spline_color", "#cc0000")
+    line_color = params.get("spline_line_color", color)
     alpha = float(params.get("spline_alpha", 0.6))
     size = float(params.get("spline_size", 0.5))
     center_root = bool(params.get("spline_center_root", True))
+    render_mode = params.get("spline_render", "points")
+    line_width = float(params.get("spline_line_width", 1.0))
 
     for node in nodes:
         coeffs = node.data.get("r", [])
@@ -174,7 +192,165 @@ def draw_splines(ax, nodes, root_pos, params, normalize_xyz):
             max_abs = np.max(np.abs(points))
             if max_abs > 0:
                 points = points / max_abs
-        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=color, marker=".", s=size, alpha=alpha)
+        if render_mode in ("line", "both"):
+            loop = np.vstack([points, points[0]])
+            ax.plot(loop[:, 0], loop[:, 1], loop[:, 2], color=line_color, alpha=alpha, linewidth=line_width)
+        if render_mode in ("points", "both"):
+            ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=color, marker=".", s=size, alpha=alpha)
+
+
+def draw_centerline_splines(ax, branches, root_pos, params, normalize_xyz):
+    if splprep is None or splev is None:
+        raise RuntimeError("scipy is required for centerline spline visualization.")
+    samples = int(params.get("centerline_spline_samples", 200))
+    smooth = float(params.get("centerline_spline_smooth", 0.0))
+    color = params.get("centerline_spline_color", "#0066cc")
+    alpha = float(params.get("centerline_spline_alpha", 0.8))
+    width = float(params.get("centerline_spline_width", 1.5))
+    center_root = bool(params.get("centerline_spline_center_root", False))
+
+    for branch in branches:
+        pts = np.array([[n.data["x"], n.data["y"], n.data["z"]] for n in branch], dtype=np.float32)
+        if pts.shape[0] < 2:
+            continue
+        if center_root:
+            pts = pts - root_pos
+        if normalize_xyz:
+            max_abs = np.max(np.abs(pts))
+            if max_abs > 0:
+                pts = pts / max_abs
+        k = 3 if pts.shape[0] > 3 else max(1, pts.shape[0] - 1)
+        try:
+            tck, _ = splprep(pts.T, s=smooth, k=k)
+        except Exception:
+            continue
+        t = np.linspace(0, 1, samples)
+        x, y, z = splev(t, tck)
+        ax.plot(x, y, z, color=color, alpha=alpha, linewidth=width)
+
+
+def _build_polylines(points_list):
+    try:
+        import vtk
+    except Exception as exc:
+        raise RuntimeError("VTK is required for VTP export.") from exc
+
+    vtk_points = vtk.vtkPoints()
+    lines = vtk.vtkCellArray()
+    for pts in points_list:
+        if pts is None or len(pts) < 2:
+            continue
+        start_idx = vtk_points.GetNumberOfPoints()
+        for p in pts:
+            vtk_points.InsertNextPoint(float(p[0]), float(p[1]), float(p[2]))
+        polyline = vtk.vtkPolyLine()
+        polyline.GetPointIds().SetNumberOfIds(len(pts))
+        for i in range(len(pts)):
+            polyline.GetPointIds().SetId(i, start_idx + i)
+        lines.InsertNextCell(polyline)
+
+    polydata = vtk.vtkPolyData()
+    polydata.SetPoints(vtk_points)
+    polydata.SetLines(lines)
+    return polydata
+
+
+def export_vtp(path, branches, nodes, root_pos, params, normalize_xyz, include_centerline=None, include_splines=None):
+    try:
+        import vtk
+    except Exception as exc:
+        raise RuntimeError("VTK is required for VTP export.") from exc
+
+    if path:
+        out_dir = os.path.dirname(path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+    if include_centerline is None:
+        include_centerline = bool(params.get("vtp_include_centerline", True))
+    if include_splines is None:
+        include_splines = bool(params.get("vtp_include_splines", True))
+    use_centerline_spline = bool(params.get("draw_centerline_spline", False))
+
+    center_root = bool(params.get("spline_center_root", True))
+    spline_samples = int(params.get("spline_samples", 50))
+
+    polydatas = []
+
+    if include_centerline:
+        centerline_pts = []
+        if use_centerline_spline:
+            if splprep is None or splev is None:
+                raise RuntimeError("scipy is required for centerline spline export.")
+            samples = int(params.get("centerline_spline_samples", 200))
+            smooth = float(params.get("centerline_spline_smooth", 0.0))
+            for branch in branches:
+                pts = np.array([[n.data["x"], n.data["y"], n.data["z"]] for n in branch], dtype=np.float32)
+                if pts.shape[0] < 2:
+                    continue
+                if center_root:
+                    pts = pts - root_pos
+                if normalize_xyz:
+                    max_abs = np.max(np.abs(pts))
+                    if max_abs > 0:
+                        pts = pts / max_abs
+                k = 3 if pts.shape[0] > 3 else max(1, pts.shape[0] - 1)
+                try:
+                    tck, _ = splprep(pts.T, s=smooth, k=k)
+                except Exception:
+                    continue
+                t = np.linspace(0, 1, samples)
+                x, y, z = splev(t, tck)
+                centerline_pts.append(np.column_stack((x, y, z)))
+        else:
+            for branch in branches:
+                pts = np.array([[n.data["x"], n.data["y"], n.data["z"]] for n in branch], dtype=np.float32)
+                if pts.shape[0] < 2:
+                    continue
+                if center_root:
+                    pts = pts - root_pos
+                if normalize_xyz:
+                    max_abs = np.max(np.abs(pts))
+                    if max_abs > 0:
+                        pts = pts / max_abs
+                centerline_pts.append(pts)
+
+        if centerline_pts:
+            polydatas.append(_build_polylines(centerline_pts))
+
+    if include_splines:
+        spline_pts = []
+        if splev is None:
+            raise RuntimeError("scipy is required for spline export.")
+        for node in nodes:
+            coeffs = node.data.get("r", [])
+            if not isinstance(coeffs, (list, tuple, np.ndarray)) or len(coeffs) < 36:
+                continue
+            pts = sample_spline_coeffs(coeffs, spline_samples)
+            if center_root:
+                pts = pts - root_pos
+            if normalize_xyz:
+                max_abs = np.max(np.abs(pts))
+                if max_abs > 0:
+                    pts = pts / max_abs
+            loop = np.vstack([pts, pts[0]])
+            spline_pts.append(loop)
+
+        if spline_pts:
+            polydatas.append(_build_polylines(spline_pts))
+
+    if not polydatas:
+        raise RuntimeError("No geometry to export.")
+
+    append = vtk.vtkAppendPolyData()
+    for pd in polydatas:
+        append.AddInputData(pd)
+    append.Update()
+
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(path)
+    writer.SetInputData(append.GetOutput())
+    writer.Write()
 
 
 def render_custom_plot(
@@ -189,6 +365,7 @@ def render_custom_plot(
     draw_edges_flag,
     draw_spheres_flag,
     draw_splines_flag,
+    draw_centerline_spline_flag,
     figsize,
 ):
     fig = plt.figure(figsize=figsize)
@@ -216,6 +393,10 @@ def render_custom_plot(
 
     if draw_splines_flag:
         draw_splines(ax, nodes, root_pos, params, normalize_xyz)
+    if draw_centerline_spline_flag:
+        branches = []
+        collect_branches(nodes[0], [], branches)
+        draw_centerline_splines(ax, branches, root_pos, params, normalize_xyz)
 
     if draw_spheres_flag:
         max_spheres = int(params.get("max_spheres", 250))
@@ -271,6 +452,8 @@ def main():
     nodes = []
     edges = []
     collect_nodes_edges(tree, nodes, edges)
+    branches = []
+    collect_branches(tree, [], branches)
 
     xyz = np.array([[n.data["x"], n.data["y"], n.data["z"]] for n in nodes], dtype=np.float32)
     root_pos = np.array([tree.data["x"], tree.data["y"], tree.data["z"]], dtype=np.float32)
@@ -312,6 +495,7 @@ def main():
 
     draw_edges_flag = bool(params.get("draw_edges", True))
     draw_splines_flag = bool(params.get("draw_splines", False))
+    draw_centerline_spline_flag = bool(params.get("draw_centerline_spline", False))
     draw_spheres_flag = bool(params.get("draw_spheres", False))
 
     if viewer == "custom":
@@ -327,6 +511,7 @@ def main():
             draw_edges_flag,
             draw_spheres_flag,
             draw_splines_flag,
+            draw_centerline_spline_flag,
             figsize,
         )
     elif viewer == "legacy_splines":
@@ -342,6 +527,7 @@ def main():
             False,
             False,
             True,
+            draw_centerline_spline_flag,
             figsize,
         )
     elif viewer == "combined":
@@ -357,6 +543,7 @@ def main():
             True,
             False,
             True,
+            draw_centerline_spline_flag,
             figsize,
         )
     elif viewer == "all":
@@ -372,6 +559,7 @@ def main():
             draw_edges_flag,
             draw_spheres_flag,
             False,
+            draw_centerline_spline_flag,
             figsize,
         )
         render_custom_plot(
@@ -386,6 +574,7 @@ def main():
             False,
             False,
             True,
+            draw_centerline_spline_flag,
             figsize,
         )
         render_custom_plot(
@@ -400,10 +589,21 @@ def main():
             True,
             False,
             True,
+            draw_centerline_spline_flag,
             figsize,
         )
     else:
         raise ValueError("Unsupported viewer mode. Use custom, legacy_splines, combined, or all.")
+
+    output_vtp = paths.get("output_vtp") or params.get("output_vtp")
+    output_vtp_centerline = paths.get("output_vtp_centerline") or params.get("output_vtp_centerline")
+    output_vtp_splines = paths.get("output_vtp_splines") or params.get("output_vtp_splines")
+    if output_vtp:
+        export_vtp(output_vtp, branches, nodes, root_pos, params, normalize_xyz)
+    if output_vtp_centerline:
+        export_vtp(output_vtp_centerline, branches, nodes, root_pos, params, normalize_xyz, include_centerline=True, include_splines=False)
+    if output_vtp_splines:
+        export_vtp(output_vtp_splines, branches, nodes, root_pos, params, normalize_xyz, include_centerline=False, include_splines=True)
 
     output_image = paths.get("output_image")
     if output_image:

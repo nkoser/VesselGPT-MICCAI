@@ -213,6 +213,30 @@ def ring_radius(points):
     return float(np.median(distances))
 
 
+def _resample_rings(rings, factor=1, mode="pchip", smooth_s=0.0):
+    rings = np.asarray(rings, dtype=np.float64)
+    if rings.ndim != 3:
+        return rings
+    num_rings, num_pts, _ = rings.shape
+    if factor is None or factor <= 1 or num_rings < 2:
+        return rings
+    t = np.linspace(0.0, 1.0, num_rings)
+    t_dense = np.linspace(0.0, 1.0, (num_rings - 1) * int(factor) + 1)
+    out = np.zeros((len(t_dense), num_pts, 3), dtype=np.float64)
+    for j in range(num_pts):
+        for dim in range(3):
+            y = rings[:, j, dim]
+            if mode == "spline":
+                f = UnivariateSpline(t, y, s=float(smooth_s))
+                out[:, j, dim] = f(t_dense)
+            elif mode == "pchip":
+                f = PchipInterpolator(t, y, extrapolate=True)
+                out[:, j, dim] = f(t_dense)
+            else:
+                out[:, j, dim] = np.interp(t_dense, t, y)
+    return out
+
+
 def _branch_arc_t(nodes):
     nodes = np.asarray(nodes, dtype=np.float64)
     if len(nodes) == 0:
@@ -532,6 +556,9 @@ def build_loft_mesh(tree, k, params):
     loft_caps = bool(params.get("loft_caps", False))
     loft_clean = bool(params.get("loft_clean", True))
     loft_min_radius = float(params.get("loft_min_radius", 0.0))
+    loft_resample_factor = int(params.get("loft_resample_factor", 1))
+    loft_vertex_smooth = params.get("loft_vertex_smooth", "pchip")
+    loft_vertex_spline_s = float(params.get("loft_vertex_spline_s", 0.0))
     append = vtk.vtkAppendPolyData()
 
     for branch in branches:
@@ -559,6 +586,16 @@ def build_loft_mesh(tree, k, params):
                 points = align_ring(prev, points, allow_flip=loft_allow_flip)
             rings.append(points)
             prev = points
+
+        if len(rings) < 2:
+            continue
+
+        rings = _resample_rings(
+            rings,
+            factor=loft_resample_factor,
+            mode=loft_vertex_smooth,
+            smooth_s=loft_vertex_spline_s,
+        )
 
         poly = build_loft_polydata(rings, loft_caps)
         if poly is None:

@@ -91,6 +91,9 @@ params:
   loft_allow_flip: true
   loft_clean: true
   loft_min_radius: 0.0
+  loft_resample_factor: 5
+  loft_vertex_smooth: pchip   # pchip | spline | linear
+  loft_vertex_spline_s: 0.0
 
   # Optional: save resampled centerlines (SDF-only)
   save_centerline: False

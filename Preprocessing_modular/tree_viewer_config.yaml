@@ -6,9 +6,14 @@ paths:
   #input: 'DemoOutput/TreesSplines_20depth_prepared'  #../Data/stage1-limpias/numpy_preorder_augmented/p20/train #'DemoOutput/TreesSplines_20depth_prepared' #'../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #'DemoOutput/TreesSplines_20depth_prepared' # '../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #DemoOutput/TreesSplines_20depth
   # Optional: set to a file path to save an image instead of showing a window
   # output_image: DemoOutput/TreesSplines_20depth/view.png
+  # Optional: export centerline + splines as VTP
+  output_vtp: DemoOutput/TreesSplines_20depth/view.vtp
+  # Optional: export to separate VTP files
+  # output_vtp_centerline: DemoOutput/TreesSplines_20depth/view_centerline.vtp
+  # output_vtp_splines: DemoOutput/TreesSplines_20depth/view_splines.vtp
 
 params:
-  k: 39
+  k: 39 
   mode: post_order
   pattern: "*.npy"
   # Pick a file by name or index (0-based). Leave both empty for first file.
@@ -52,6 +57,22 @@ params:
   spline_alpha: 0.6
   spline_size: 0.5
   spline_center_root: false
+  spline_render: points    # points | line | both
+  spline_line_width: 1.0
+  spline_line_color: "#cc0000"
+
+  # Optional: smooth centerline splines per branch (requires scipy)
+  draw_centerline_spline: false
+  centerline_spline_samples: 200
+  centerline_spline_smooth: 0.0
+  centerline_spline_color: "#0066cc"
+  centerline_spline_alpha: 0.8
+  centerline_spline_width: 1.5
+  centerline_spline_center_root: false
+
+  # VTP export toggles
+  vtp_include_centerline: true
+  vtp_include_splines: true
 
   draw_spheres: true
   max_spheres: 50
