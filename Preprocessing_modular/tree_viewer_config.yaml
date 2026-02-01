@@ -2,7 +2,7 @@
 
 paths:
   # Input can be a directory or a single .npy file
-  input: '/home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput2/TreesSplines/C0001.npy'
+  input: '/home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput5/TreesSplines/C0001.npy'
   #input: 'DemoOutput/TreesSplines_20depth_prepared'  #../Data/stage1-limpias/numpy_preorder_augmented/p20/train #'DemoOutput/TreesSplines_20depth_prepared' #'../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #'DemoOutput/TreesSplines_20depth_prepared' # '../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #DemoOutput/TreesSplines_20depth
   # Optional: set to a file path to save an image instead of showing a window
   # output_image: DemoOutput/TreesSplines_20depth/view.png

@@ -5,7 +5,7 @@ paths:
   raw_root: '/home/sukin707/VesselGPT/DemoData1'
 
   # Root folder where all outputs will be created.
-  output_root: 'DemoOutput2'
+  output_root: 'DemoOutput5'
 
   # Optional overrides (uncomment to customize individual paths)
   # raw_meshes: ../modelsRaw
@@ -24,7 +24,25 @@ paths:
   # trees_splines: ../modelsNormalizado/TreesSplines
 
 params:
-  resample_epsilon: 0.001
+  # resample_method: rdp | step | vmtk
+  resample_method: step
+  resample_epsilon: 0.007
+  # step-based resampling (used when resample_method: step or vmtk)
+  resample_step: 0.01
+  # optional radius-adaptive step sizing
+  resample_use_radius: true
+  resample_step_min: 0.003
+  resample_step_max: 0.01
+  resample_radius_scale: 0.1
+  # radius_mode: inverse | direct | drds
+  # drds uses step = step_max / (1 + drds_boost * max(|dr/ds| - drds_threshold, 0))
+  resample_radius_mode: drds
+  resample_drds_threshold: 0.05
+  resample_drds_boost: 3.0
+  # densify around junctions (degree >= resample_junction_degree)
+  resample_junction_window: 0.02
+  resample_junction_factor: 0.3
+  resample_junction_degree: 3
   vmtk_script: vmtknetworkextraction -advancementratio 1.05
   normalize_overwrite: false
   spline_fit_mode: robust

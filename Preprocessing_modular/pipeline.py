@@ -15,7 +15,12 @@ try:
 except Exception as exc:
     raise RuntimeError("PyYAML is required. Install with: pip install pyyaml") from exc
 
-from Preprocessing.ResamplingRDP import interpolarRDP_conRadio, vtpToObj
+from Preprocessing.ResamplingRDP import (
+    interpolarRDP_conRadio,
+    resample_centerline_step,
+    resample_centerline_vmtk,
+    vtpToObj,
+)
 from Preprocessing.splines import (
     calculate_splines,
     limpiarRadiosSplines,
@@ -210,7 +215,19 @@ class PreprocessingPipeline:
         self._ensure_dir(self.paths["centerlines_resampled"])
         reader = vtk.vtkXMLPolyDataReader()
         writer = vtk.vtkXMLPolyDataWriter()
+        method = (self.params.get("resample_method", "rdp") or "rdp").lower()
         epsilon = self.params.get("resample_epsilon", 0.02)
+        step = self.params.get("resample_step", 0.003)
+        use_radius = bool(self.params.get("resample_use_radius", False))
+        step_min = self.params.get("resample_step_min", 0.001)
+        step_max = self.params.get("resample_step_max", 0.006)
+        radius_scale = self.params.get("resample_radius_scale", 0.3)
+        radius_mode = self.params.get("resample_radius_mode", "inverse")
+        drds_threshold = self.params.get("resample_drds_threshold", 0.0)
+        drds_boost = self.params.get("resample_drds_boost", 1.0)
+        junction_window = self.params.get("resample_junction_window", 0.0)
+        junction_factor = self.params.get("resample_junction_factor", 1.0)
+        junction_degree = self.params.get("resample_junction_degree", 3)
 
         centerlines = os.listdir(self.paths["centerlines"])
         for file in centerlines:
@@ -222,7 +239,27 @@ class PreprocessingPipeline:
             reader.SetFileName(os.path.join(self.paths["centerlines"], file))
             reader.Update()
             centerline = reader.GetOutput()
-            resampled = interpolarRDP_conRadio(centerline, epsilon)
+            if method == "rdp":
+                resampled = interpolarRDP_conRadio(centerline, epsilon)
+            elif method == "step":
+                resampled = resample_centerline_step(
+                    centerline,
+                    step=step,
+                    use_radius=use_radius,
+                    step_min=step_min,
+                    step_max=step_max,
+                    radius_scale=radius_scale,
+                    radius_mode=radius_mode,
+                    drds_threshold=drds_threshold,
+                    drds_boost=drds_boost,
+                    junction_window=junction_window,
+                    junction_factor=junction_factor,
+                    junction_degree=junction_degree,
+                )
+            elif method == "vmtk":
+                resampled = resample_centerline_vmtk(centerline, step=step)
+            else:
+                raise ValueError(f"Unknown resample_method: {method}")
             writer.SetFileName(os.path.join(self.paths["centerlines_resampled"], file))
             writer.SetInputData(resampled)
             writer.Write()
