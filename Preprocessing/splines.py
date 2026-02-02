@@ -143,8 +143,13 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
         mesh = read_vtp(meshfolder + f + ".vtp")
 
         # Slice the mesh and filter cross-sections
-        splines = []
-        knots = []
+        n_total = 0
+        for j in range(centerline.GetNumberOfCells()):
+            n_total += centerline.GetCell(j).GetNumberOfPoints()
+        splines = [None] * n_total
+        knots = [None] * n_total
+        areas = [np.nan] * n_total
+        ratios = [np.nan] * n_total
         points_Acum = 0
         for j in range(centerline.GetNumberOfCells()):#calculate the radius by branch to avoid problems at the connections between branches
 
@@ -152,6 +157,7 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
             last_good_tck = None
 
             for i in range (numberOfCellPoints):
+                idx = points_Acum
 
                 tangent = np.zeros(3)
 
@@ -162,13 +168,12 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
                     point1 = centerline.GetPoint(points_Acum)
 
                     distance = np.sqrt(vtk.vtkMath.Distance2BetweenPoints(point0,point1))
-
-                    ##vector between the two points divided by the distance
-
-                    tangent[0] += (point1[0] - point0[0]) / distance
-                    tangent[1] += (point1[1] - point0[1]) / distance
-                    tangent[2] += (point1[2] - point0[2]) / distance
-                    weightSum += 1.0
+                    if distance > 1e-12:
+                        ##vector between the two points divided by the distance
+                        tangent[0] += (point1[0] - point0[0]) / distance
+                        tangent[1] += (point1[1] - point0[1]) / distance
+                        tangent[2] += (point1[2] - point0[2]) / distance
+                        weightSum += 1.0
 
                 ##tangent line with the next point (not calculated at the last one)
 
@@ -178,10 +183,11 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
                     point0 = centerline.GetPoint(points_Acum+1)
 
                     distance = np.sqrt(vtk.vtkMath.Distance2BetweenPoints(point0,point1))
-                    tangent[0] += (point0[0] - point1[0]) / distance
-                    tangent[1] += (point0[1] - point1[1]) / distance
-                    tangent[2] += (point0[2] - point1[2]) / distance
-                    weightSum += 1.0
+                    if distance > 1e-12:
+                        tangent[0] += (point0[0] - point1[0]) / distance
+                        tangent[1] += (point0[1] - point1[1]) / distance
+                        tangent[2] += (point0[2] - point1[2]) / distance
+                        weightSum += 1.0
 
 
                 if weightSum > 0:
@@ -193,7 +199,8 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
                 plane = vtk.vtkPlane()
                 plane.SetOrigin(point1)
                 plane.SetNormal(tangent)
-                points_Acum += 1
+                tck = None
+                perimeter = np.nan
                 # Slice the mesh
                 cutter = vtk.vtkCutter()
                 cutter.SetCutFunction(plane)
@@ -231,7 +238,7 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
                         distancias =points-point1
                         normas = np.linalg.norm(distancias, axis=1)
                         ratio = np.min(normas)/np.max(normas)
-                        ratios.append(ratio)
+                        ratios[idx] = ratio
                         tck = None
                         if fit_mode == "robust":
                             if os.environ.get("VGP_SPLINE_DEBUG"):
@@ -312,10 +319,10 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
                                 tck = None
 
                             if tck is None:
-                                continue
+                                tck = None
 
-                        splines.append(tck[1])#(splc)#
-                        knots.append(tck[0])#(spl.t)#
+                        splines[idx] = tck[1]#(splc)#
+                        knots[idx] = tck[0]#(spl.t)#
                         last_good_tck = tck
 
 
@@ -330,7 +337,28 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
 
                         # Calculate the perimeter
                         perimeter = np.sum(distances)
-                        areas.append(perimeter)
+                        areas[idx] = perimeter
+
+                if tck is None:
+                    if last_good_tck is not None:
+                        tck = last_good_tck
+                    else:
+                        tck = _degenerate_tck_at_point(point1)
+                    splines[idx] = tck[1]
+                    knots[idx] = tck[0]
+
+                if not np.isfinite(perimeter):
+                    try:
+                        u_fine = np.linspace(0, 1, 200)
+                        spline_points = np.array(splev(u_fine, tck))
+                        points = np.column_stack(spline_points)
+                        distances = np.linalg.norm(np.diff(points, axis=0), axis=1)
+                        perimeter = np.sum(distances)
+                    except Exception:
+                        perimeter = np.nan
+                    areas[idx] = perimeter
+
+                points_Acum += 1
 
                             ######################################################################
         centerline_np = get_points_by_line(centerline)
@@ -371,15 +399,24 @@ def calculate_splines(mesh, coef_folder, centerfolder, meshfolder, params=None):
 
 
             for point in res:
-                ar = [areas[i] for i in res[point]]
-                min = np.min(ar)
-                min_i = list(areas).index(min)
+                pairs = [(i, areas[i]) for i in res[point] if i < len(areas) and np.isfinite(areas[i])]
+                if not pairs:
+                    continue
+                min_i, _ = min(pairs, key=lambda x: x[1])
                 for index in res[point]:
-                    splines[index] = splines[min_i]#coordinates
-                    knots[index] = knots[min_i]#np.full(12,0.)
+                    if index < len(splines):
+                        splines[index] = splines[min_i]#coordinates
+                        knots[index] = knots[min_i]#np.full(12,0.)
 
-
-            indices_greater_than_average = sorted([(i,element) for i, element in enumerate(areas) if element > 3*np.mean(areas)], key=lambda x: x[1], reverse=True)
+            mean_area = np.nanmean(areas) if np.any(np.isfinite(areas)) else np.nan
+            if np.isfinite(mean_area):
+                indices_greater_than_average = sorted(
+                    [(i, element) for i, element in enumerate(areas) if np.isfinite(element) and element > 3 * mean_area],
+                    key=lambda x: x[1],
+                    reverse=True,
+                )
+            else:
+                indices_greater_than_average = []
             for index, area in indices_greater_than_average:
                 x,y,z = centerline_np[index][:3]
                 coordinates = [

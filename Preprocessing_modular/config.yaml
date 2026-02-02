@@ -24,25 +24,43 @@ paths:
   # trees_splines: ../modelsNormalizado/TreesSplines
 
 params:
-  # resample_method: rdp | step | vmtk
-  resample_method: step
+  # resample_method: rdp | step | event | minimal | vmtk
+  resample_method: minimal
   resample_epsilon: 0.007
   # step-based resampling (used when resample_method: step or vmtk)
   resample_step: 0.01
   # optional radius-adaptive step sizing
   resample_use_radius: true
-  resample_step_min: 0.003
-  resample_step_max: 0.01
+  resample_base_step: 0.05
+  resample_step_min: 0.005
+  resample_step_max: 0.02
   resample_radius_scale: 0.1
   # radius_mode: inverse | direct | drds
   # drds uses step = step_max / (1 + drds_boost * max(|dr/ds| - drds_threshold, 0))
   resample_radius_mode: drds
   resample_drds_threshold: 0.05
-  resample_drds_boost: 3.0
+  resample_drds_boost: 2.0
+  # curvature densification (turning rate)
+  resample_curv_threshold: 5.0
+  resample_curv_boost: 0.5
   # densify around junctions (degree >= resample_junction_degree)
   resample_junction_window: 0.02
   resample_junction_factor: 0.3
   resample_junction_degree: 3
+  # event-based resampling params
+  resample_event_step: 0.01
+  resample_event_window: 0.03
+  # minimal adaptive resampling params
+  resample_geom_tol: 0.02
+  resample_rad_tol: 0.04
+  resample_w_rad: 1.0
+  resample_clean_tol: 0.00001
+  # keep a small neighborhood around junctions in minimal mode
+  resample_junction_keep_k: 2
+  resample_junction_keep_window: 0.02
+  resample_max_points_per_branch: 60
+  # hard cap per branch (None disables)
+  #resample_max_points_per_branch: 10
   vmtk_script: vmtknetworkextraction -advancementratio 1.05
   normalize_overwrite: false
   spline_fit_mode: robust

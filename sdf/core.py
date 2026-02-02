@@ -166,8 +166,11 @@ def generate(
 
 def save(path, *args, **kwargs):
     points, bounds = generate(*args, **kwargs)
-    if path.lower().endswith('.stl'):
+    lower = path.lower()
+    if lower.endswith('.stl'):
         stl.write_binary_stl(path, points)
+    elif lower.endswith('.vtp'):
+        _write_vtp(path, points)
     else:
         mesh = _mesh(points)
         mesh.write(path)
@@ -178,6 +181,34 @@ def _mesh(points):
     points, cells = np.unique(points, axis=0, return_inverse=True)
     cells = [('triangle', cells.reshape((-1, 3)))]
     return meshio.Mesh(points, cells)
+
+
+def _write_vtp(path, points):
+    import vtk
+    pts, cells = np.unique(points, axis=0, return_inverse=True)
+    cells = cells.reshape((-1, 3))
+
+    vtk_points = vtk.vtkPoints()
+    vtk_points.SetNumberOfPoints(len(pts))
+    for i, p in enumerate(pts):
+        vtk_points.SetPoint(i, float(p[0]), float(p[1]), float(p[2]))
+
+    triangles = vtk.vtkCellArray()
+    for a, b, c in cells:
+        tri = vtk.vtkTriangle()
+        tri.GetPointIds().SetId(0, int(a))
+        tri.GetPointIds().SetId(1, int(b))
+        tri.GetPointIds().SetId(2, int(c))
+        triangles.InsertNextCell(tri)
+
+    poly = vtk.vtkPolyData()
+    poly.SetPoints(vtk_points)
+    poly.SetPolys(triangles)
+
+    writer = vtk.vtkXMLPolyDataWriter()
+    writer.SetFileName(path)
+    writer.SetInputData(poly)
+    writer.Write()
 
 def _debug_triangles(X, Y, Z):
     x0, x1 = X[0], X[-1]

@@ -18,6 +18,8 @@ except Exception as exc:
 from Preprocessing.ResamplingRDP import (
     interpolarRDP_conRadio,
     resample_centerline_step,
+    resample_centerline_minimal_adaptive,
+    resample_centerline_event,
     resample_centerline_vmtk,
     vtpToObj,
 )
@@ -221,13 +223,25 @@ class PreprocessingPipeline:
         use_radius = bool(self.params.get("resample_use_radius", False))
         step_min = self.params.get("resample_step_min", 0.001)
         step_max = self.params.get("resample_step_max", 0.006)
+        base_step = self.params.get("resample_base_step")
         radius_scale = self.params.get("resample_radius_scale", 0.3)
         radius_mode = self.params.get("resample_radius_mode", "inverse")
+        curv_threshold = self.params.get("resample_curv_threshold", 0.0)
+        curv_boost = self.params.get("resample_curv_boost", 0.0)
         drds_threshold = self.params.get("resample_drds_threshold", 0.0)
         drds_boost = self.params.get("resample_drds_boost", 1.0)
         junction_window = self.params.get("resample_junction_window", 0.0)
         junction_factor = self.params.get("resample_junction_factor", 1.0)
         junction_degree = self.params.get("resample_junction_degree", 3)
+        max_points_per_branch = self.params.get("resample_max_points_per_branch")
+        event_step = self.params.get("resample_event_step", 0.005)
+        event_window = self.params.get("resample_event_window", 0.02)
+        geom_tol = self.params.get("resample_geom_tol", 0.02)
+        rad_tol = self.params.get("resample_rad_tol", 0.04)
+        w_rad = self.params.get("resample_w_rad", 1.0)
+        clean_tol = self.params.get("resample_clean_tol", 0.0)
+        junction_keep_k = self.params.get("resample_junction_keep_k", 0)
+        junction_keep_window = self.params.get("resample_junction_keep_window", 0.0)
 
         centerlines = os.listdir(self.paths["centerlines"])
         for file in centerlines:
@@ -248,13 +262,40 @@ class PreprocessingPipeline:
                     use_radius=use_radius,
                     step_min=step_min,
                     step_max=step_max,
+                    base_step=base_step,
                     radius_scale=radius_scale,
                     radius_mode=radius_mode,
+                    curv_threshold=curv_threshold,
+                    curv_boost=curv_boost,
                     drds_threshold=drds_threshold,
                     drds_boost=drds_boost,
                     junction_window=junction_window,
                     junction_factor=junction_factor,
                     junction_degree=junction_degree,
+                    max_points_per_branch=max_points_per_branch,
+                )
+            elif method == "event":
+                resampled = resample_centerline_event(
+                    centerline,
+                    base_step=base_step if base_step is not None else step,
+                    event_step=event_step,
+                    event_window=event_window,
+                    drds_threshold=drds_threshold,
+                    curv_threshold=curv_threshold,
+                    junction_window=junction_window,
+                    junction_degree=junction_degree,
+                )
+            elif method == "minimal":
+                resampled = resample_centerline_minimal_adaptive(
+                    centerline,
+                    geom_tol=geom_tol,
+                    rad_tol=rad_tol,
+                    w_rad=w_rad,
+                    junction_degree=junction_degree,
+                    junction_keep_k=junction_keep_k,
+                    junction_keep_window=junction_keep_window,
+                    max_points_per_branch=max_points_per_branch,
+                    clean_tol=clean_tol,
                 )
             elif method == "vmtk":
                 resampled = resample_centerline_vmtk(centerline, step=step)

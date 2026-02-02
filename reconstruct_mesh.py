@@ -207,6 +207,33 @@ def align_ring(prev, curr, allow_flip=True):
     return aligned
 
 
+def canonicalize_ring(ring, center, tangent):
+    ring = np.asarray(ring, dtype=np.float64)
+    center = np.asarray(center, dtype=np.float64)
+    t = np.asarray(tangent, dtype=np.float64)
+    tn = np.linalg.norm(t)
+    if tn < 1e-12:
+        t = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    else:
+        t = t / tn
+
+    n = _perpendicular_unit(t)
+    b = np.cross(t, n)
+    b = b / (np.linalg.norm(b) + 1e-12)
+
+    d = ring - center
+    x = d @ n
+    y = d @ b
+    ang = np.arctan2(y, x)
+    order = np.argsort(ang)
+    ring = ring[order]
+
+    x_sorted = x[order]
+    start = int(np.argmax(x_sorted))
+    ring = np.roll(ring, -start, axis=0)
+    return ring
+
+
 def ring_radius(points):
     center = np.mean(points, axis=0)
     distances = np.linalg.norm(points - center, axis=1)
@@ -319,6 +346,112 @@ def _map_vectors_to_t(t_target, t_src, vectors_src):
     idx = np.searchsorted(t_src, t_target, side="right") - 1
     idx = np.clip(idx, 0, len(t_src) - 1)
     return vectors_src[idx]
+
+
+def _map_vectors_to_t_linear(t_target, t_src, vectors_src):
+    t_target = np.asarray(t_target, dtype=np.float64)
+    t_src = np.asarray(t_src, dtype=np.float64)
+    v = np.asarray(vectors_src, dtype=np.float64)
+    if len(t_src) == 0:
+        return np.zeros((len(t_target), 3), dtype=np.float64)
+    if len(t_src) == 1:
+        vv = v[0] / (np.linalg.norm(v[0]) + 1e-12)
+        return np.repeat(vv[None, :], len(t_target), axis=0)
+    i = np.searchsorted(t_src, t_target, side="right") - 1
+    i = np.clip(i, 0, len(t_src) - 2)
+    j = i + 1
+    t0 = t_src[i]
+    t1 = t_src[j]
+    w = np.where((t1 - t0) > 1e-12, (t_target - t0) / (t1 - t0), 0.0)
+    w = w[:, None]
+    vi = v[i]
+    vj = v[j]
+    flip = (np.sum(vi * vj, axis=1) < 0.0)[:, None]
+    vj = np.where(flip, -vj, vj)
+    out = (1.0 - w) * vi + w * vj
+    out = out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-12)
+    return out
+
+
+def _orthonormalize_axes(axis1, axis2):
+    axis1 = np.asarray(axis1, dtype=np.float64)
+    axis2 = np.asarray(axis2, dtype=np.float64)
+    axis1 = axis1 / (np.linalg.norm(axis1, axis=1, keepdims=True) + 1e-12)
+    axis2 = axis2 - np.sum(axis2 * axis1, axis=1, keepdims=True) * axis1
+    axis2 = axis2 / (np.linalg.norm(axis2, axis=1, keepdims=True) + 1e-12)
+    return axis1, axis2
+
+
+def _project_axes_to_segments(axis1, axis2, seg_vecs):
+    axis1 = np.asarray(axis1, dtype=np.float64)
+    axis2 = np.asarray(axis2, dtype=np.float64)
+    seg_vecs = np.asarray(seg_vecs, dtype=np.float64)
+    out1 = np.zeros_like(axis1)
+    out2 = np.zeros_like(axis2)
+    for i in range(seg_vecs.shape[0]):
+        v = seg_vecs[i]
+        vn = np.linalg.norm(v)
+        if vn < 1e-12:
+            out1[i] = axis1[i]
+            out2[i] = axis2[i]
+            continue
+        vhat = v / vn
+        a1 = axis1[i] - np.dot(axis1[i], vhat) * vhat
+        n1 = np.linalg.norm(a1)
+        if n1 < 1e-8:
+            a1 = _perpendicular_unit(vhat)
+        else:
+            a1 = a1 / n1
+        a2 = np.cross(vhat, a1)
+        n2 = np.linalg.norm(a2)
+        if n2 < 1e-8:
+            a2 = _perpendicular_unit(vhat)
+        else:
+            a2 = a2 / n2
+        a1 = np.cross(a2, vhat)
+        a1 = a1 / (np.linalg.norm(a1) + 1e-12)
+        out1[i] = a1
+        out2[i] = a2
+    return out1, out2
+
+
+def _project_axes_to_segment_pair(axis1, axis2, seg_vec):
+    a1, a2 = _project_axes_to_segments(
+        np.asarray(axis1, dtype=np.float64)[None, :],
+        np.asarray(axis2, dtype=np.float64)[None, :],
+        np.asarray(seg_vec, dtype=np.float64)[None, :],
+    )
+    return a1[0], a2[0]
+
+
+def _ellipse_sdf_batch(x, y, a, b, n_iter=3):
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+
+    x0 = np.abs(x)
+    y0 = np.abs(y)
+    a = np.maximum(a, 1e-6)
+    b = np.maximum(b, 1e-6)
+
+    t = np.arctan2(y0 * b, x0 * a)
+    for _ in range(max(1, int(n_iter))):
+        ct = np.cos(t)
+        st = np.sin(t)
+        u = a * ct - x0
+        v = b * st - y0
+        f = -a * st * u + b * ct * v
+        fp = -a * ct * u + (a * a) * st * st - b * st * v + (b * b) * ct * ct
+        t = t - f / (fp + 1e-12)
+
+    ct = np.cos(t)
+    st = np.sin(t)
+    dx = a * ct - x0
+    dy = b * st - y0
+    dist = np.sqrt(dx * dx + dy * dy)
+    inside = (x0 / a) ** 2 + (y0 / b) ** 2 - 1.0
+    return np.where(inside < 0.0, -dist, dist)
 
 
 def _compute_radius_for_node(points, center, radius_mode, radius_percentile):
@@ -555,33 +688,56 @@ def build_loft_mesh(tree, k, params):
     loft_allow_flip = bool(params.get("loft_allow_flip", True))
     loft_caps = bool(params.get("loft_caps", False))
     loft_clean = bool(params.get("loft_clean", True))
+    loft_clean_tol = float(params.get("loft_clean_tol", 0.0))
     loft_min_radius = float(params.get("loft_min_radius", 0.0))
     loft_resample_factor = int(params.get("loft_resample_factor", 1))
     loft_vertex_smooth = params.get("loft_vertex_smooth", "pchip")
     loft_vertex_spline_s = float(params.get("loft_vertex_spline_s", 0.0))
+    loft_canonicalize = bool(params.get("loft_canonicalize", True))
+    loft_center_mode = params.get("loft_center_mode", "node")
+    loft_invalid_mode = params.get("loft_invalid_mode", "skip")
+    loft_normals = bool(params.get("loft_normals", False))
+    loft_smooth = bool(params.get("loft_smooth", False))
+    loft_smooth_iters = int(params.get("loft_smooth_iters", 30))
     append = vtk.vtkAppendPolyData()
 
     for branch in branches:
+        nodes = branch[:, :3]
         splines = branch[:, 3:]
         rings = []
         prev = None
-        for coeffs in splines:
+        for idx, coeffs in enumerate(splines):
             points = sample_spline_coeffs(coeffs, spline_samples)
             if points is None:
-                if prev is not None:
+                if loft_invalid_mode == "copy" and prev is not None:
                     points = prev.copy()
                 else:
                     continue
             if not np.all(np.isfinite(points)):
-                if prev is not None:
+                if loft_invalid_mode == "copy" and prev is not None:
                     points = prev.copy()
                 else:
                     continue
             if loft_min_radius > 0 and ring_radius(points) < loft_min_radius:
-                if prev is not None:
+                if loft_invalid_mode == "copy" and prev is not None:
                     points = prev.copy()
                 else:
                     continue
+
+            if loft_center_mode == "node" and idx < len(nodes):
+                center = nodes[idx]
+            else:
+                center = np.mean(points, axis=0)
+
+            if loft_canonicalize:
+                if idx == 0:
+                    tangent = nodes[1] - nodes[0] if len(nodes) > 1 else np.array([0.0, 0.0, 1.0])
+                elif idx == len(nodes) - 1:
+                    tangent = nodes[-1] - nodes[-2]
+                else:
+                    tangent = nodes[idx + 1] - nodes[idx - 1]
+                points = canonicalize_ring(points, center, tangent)
+
             if loft_align:
                 points = align_ring(prev, points, allow_flip=loft_allow_flip)
             rings.append(points)
@@ -607,8 +763,30 @@ def build_loft_mesh(tree, k, params):
     if loft_clean:
         cleaner = vtk.vtkCleanPolyData()
         cleaner.SetInputData(polydata)
+        if loft_clean_tol > 0:
+            cleaner.SetTolerance(loft_clean_tol)
         cleaner.Update()
         polydata = cleaner.GetOutput()
+
+    if loft_normals:
+        normals = vtk.vtkPolyDataNormals()
+        normals.SetInputData(polydata)
+        normals.AutoOrientNormalsOn()
+        normals.ConsistencyOn()
+        normals.SplittingOff()
+        normals.Update()
+        polydata = normals.GetOutput()
+
+    if loft_smooth:
+        smooth = vtk.vtkWindowedSincPolyDataFilter()
+        smooth.SetInputData(polydata)
+        smooth.SetNumberOfIterations(loft_smooth_iters)
+        smooth.BoundarySmoothingOff()
+        smooth.FeatureEdgeSmoothingOff()
+        smooth.NonManifoldSmoothingOn()
+        smooth.NormalizeCoordinatesOn()
+        smooth.Update()
+        polydata = smooth.GetOutput()
 
     tri = vtk.vtkTriangleFilter()
     tri.SetInputData(polydata)
@@ -633,6 +811,8 @@ def build_sweep_sdf(tree, k, params):
     sweep_samples = int(params.get("sweep_samples", 400))
     sweep_centerline_mode = params.get("sweep_centerline_mode", "spline")
     sweep_centerline_smooth = float(params.get("sweep_centerline_smooth", params.get("centerline_smooth", 0.0)))
+    sweep_min_segment_length = float(params.get("sweep_min_segment_length", 0.0))
+    sweep_radius_sanity_factor = params.get("sweep_radius_sanity_factor", None)
     branch_smooth_k = params.get("sweep_branch_smooth_k", 0.0)
     try:
         branch_smooth_k = float(branch_smooth_k) if branch_smooth_k is not None else 0.0
@@ -675,6 +855,17 @@ def build_sweep_sdf(tree, k, params):
             radii.append(float(radius))
             last_radius = float(radius)
 
+        if sweep_radius_sanity_factor is not None:
+            try:
+                factor = float(sweep_radius_sanity_factor)
+            except Exception:
+                factor = None
+            if factor is not None and factor > 0 and len(radii) > 0:
+                r_med = float(np.nanmedian(radii))
+                if np.isfinite(r_med) and r_med > 0:
+                    cap_val = r_med * factor
+                    radii = [min(r, cap_val) if np.isfinite(r) else r for r in radii]
+
         t_u, nodes_u, r_u = _dedupe_t_points(t_nodes, nodes, radii)
         if len(t_u) < 2:
             continue
@@ -708,6 +899,9 @@ def build_sweep_sdf(tree, k, params):
             r1 = float(r_samples[j + 1])
             if r0 <= 0 and r1 <= 0:
                 continue
+            if sweep_min_segment_length > 0:
+                if np.linalg.norm(p1 - p0) < sweep_min_segment_length:
+                    continue
             segments.append(cone_fn(p0, p1, r0, r1))
 
         if segments:
@@ -746,6 +940,10 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
     vessels = []
     debug_sdf = bool(params.get("debug_sdf", False))
     recon_mode = params.get("recon_mode", "legacy")
+    branch_local = False
+    if recon_mode in {"legacy_branch", "legacy_branch_local"}:
+        branch_local = True
+        recon_mode = "legacy"
     if recon_mode not in {"legacy", "stable", "sdf_offset"}:
         recon_mode = "legacy"
     legacy_variant = params.get("legacy_variant", "original")  # original | robust
@@ -779,8 +977,14 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
         tck = create_3d_spline(centerline_nodes, centerline_smooth)
         if tck is None:
             continue
-        sampled = sample_spline(tck, centerline_samples)
-        t_values = np.linspace(0, 1, sampled.shape[0])
+        if branch_local:
+            sampled = np.array(centerline_nodes, dtype=np.float64)
+            t_values = _branch_arc_t(sampled)
+            local_t_mode = "kdtree"
+        else:
+            sampled = sample_spline(tck, centerline_samples)
+            t_values = np.linspace(0, 1, sampled.shape[0])
+            local_t_mode = centerline_t_mode
         if recon_mode in {"stable", "sdf_offset"}:
             centers_for_radius = centerline_nodes if recon_mode == "sdf_offset" else nodes
             stable_kwargs = dict(
@@ -793,7 +997,7 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
             if "tck" in inspect.signature(vessel3_stable).parameters:
                 stable_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
             if "centerline_t_mode" in inspect.signature(vessel3_stable).parameters:
-                stable_kwargs.update(centerline_t_mode=centerline_t_mode)
+                stable_kwargs.update(centerline_t_mode=local_t_mode)
             vessels.append(vessel3_stable(sampled, centers_for_radius, splines, **stable_kwargs))
         else:
             if legacy_variant == "robust":
@@ -801,7 +1005,7 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
                 if "tck" in inspect.signature(vessel3_robust).parameters:
                     robust_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
                 if "centerline_t_mode" in inspect.signature(vessel3_robust).parameters:
-                    robust_kwargs.update(centerline_t_mode=centerline_t_mode)
+                    robust_kwargs.update(centerline_t_mode=local_t_mode)
                 if "fallback_radius" in inspect.signature(vessel3_robust).parameters:
                     robust_kwargs.update(fallback_radius=params.get("robust_fallback_radius", 0.02))
                 if "min_radius" in inspect.signature(vessel3_robust).parameters:
@@ -824,7 +1028,7 @@ def build_sdf(tree, k, centerline_samples, centerline_smooth, params):
                 if "tck" in inspect.signature(vessel3).parameters:
                     legacy_kwargs.update(tck=tck, sampled_spline=sampled, t_values=t_values)
                 if "centerline_t_mode" in inspect.signature(vessel3).parameters:
-                    legacy_kwargs.update(centerline_t_mode=centerline_t_mode)
+                    legacy_kwargs.update(centerline_t_mode=local_t_mode)
                 vessels.append(vessel3(sampled, nodes, splines, **legacy_kwargs))
 
     if not vessels:
@@ -863,6 +1067,8 @@ def build_sweep_ellipse_sdf(tree, k, params):
     sweep_samples = int(params.get("sweep_samples", 400))
     sweep_centerline_mode = params.get("sweep_centerline_mode", "spline")
     sweep_centerline_smooth = float(params.get("sweep_centerline_smooth", params.get("centerline_smooth", 0.0)))
+    sweep_min_segment_length = float(params.get("sweep_min_segment_length", 0.0))
+    sweep_radius_sanity_factor = params.get("sweep_radius_sanity_factor", None)
     branch_smooth_k = params.get("sweep_branch_smooth_k", 0.0)
     use_pca = bool(params.get("sweep_ellipse_use_pca", True))
     try:
@@ -929,13 +1135,29 @@ def build_sweep_ellipse_sdf(tree, k, params):
         if len(a_list) < 2:
             continue
 
+        if sweep_radius_sanity_factor is not None:
+            try:
+                factor = float(sweep_radius_sanity_factor)
+            except Exception:
+                factor = None
+            if factor is not None and factor > 0:
+                a_med = float(np.nanmedian(a_list))
+                b_med = float(np.nanmedian(b_list))
+                if np.isfinite(a_med) and a_med > 0:
+                    a_cap = a_med * factor
+                    a_list = [min(a, a_cap) if np.isfinite(a) else a for a in a_list]
+                if np.isfinite(b_med) and b_med > 0:
+                    b_cap = b_med * factor
+                    b_list = [min(b, b_cap) if np.isfinite(b) else b for b in b_list]
+
         # smooth a(t), b(t)
         t_u, nodes_u, a_u = _dedupe_t_points(t_nodes, nodes, a_list)
         t_u, _, b_u = _dedupe_t_points(t_nodes, nodes, b_list)
         t_axis1, axis1_u = _dedupe_t_vectors(t_nodes, axis1_list)
         t_axis2, axis2_u = _dedupe_t_vectors(t_nodes, axis2_list)
-        axis1_u = _map_vectors_to_t(t_u, t_axis1, axis1_u)
-        axis2_u = _map_vectors_to_t(t_u, t_axis2, axis2_u)
+        axis1_u = _map_vectors_to_t_linear(t_u, t_axis1, axis1_u)
+        axis2_u = _map_vectors_to_t_linear(t_u, t_axis2, axis2_u)
+        axis1_u, axis2_u = _orthonormalize_axes(axis1_u, axis2_u)
         if len(t_u) < 2:
             continue
 
@@ -984,8 +1206,12 @@ def build_sweep_ellipse_sdf(tree, k, params):
             b1 = float(b_samples[j + 1])
             if a0 <= 0 and b0 <= 0 and a1 <= 0 and b1 <= 0:
                 continue
+            if sweep_min_segment_length > 0:
+                if np.linalg.norm(p1 - p0) < sweep_min_segment_length:
+                    continue
             axis1 = axis1_u[seg_idx[j]]
             axis2 = axis2_u[seg_idx[j]]
+            axis1, axis2 = _project_axes_to_segment_pair(axis1, axis2, p1 - p0)
             segments.append(ellipse_fn(p0, p1, a0, b0, a1, b1, axis1, axis2))
 
         if segments:
@@ -1027,8 +1253,12 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
     sweep_samples = int(params.get("sweep_samples", 400))
     sweep_centerline_mode = params.get("sweep_centerline_mode", "spline")
     sweep_centerline_smooth = float(params.get("sweep_centerline_smooth", params.get("centerline_smooth", 0.0)))
+    sweep_min_segment_length = float(params.get("sweep_min_segment_length", 0.0))
+    sweep_radius_sanity_factor = params.get("sweep_radius_sanity_factor", None)
     smooth_mode = params.get("sweep_radius_smooth", "pchip")
     smooth_s = float(params.get("sweep_spline_s", 0.0))
+    sweep_sdf_clip = params.get("sweep_sdf_clip", None)
+    sweep_ellipse_sdf_iters = int(params.get("sweep_ellipse_sdf_iters", 3))
     use_pca = bool(params.get("sweep_ellipse_use_pca", True))
     seg_batch = int(params.get("sweep_segment_batch", 256))
     _, _, _, sdf3_backend = get_sweep_primitives_and_union(params)
@@ -1105,12 +1335,28 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
             if len(a_list) < 2:
                 continue
 
+            if sweep_radius_sanity_factor is not None:
+                try:
+                    factor = float(sweep_radius_sanity_factor)
+                except Exception:
+                    factor = None
+                if factor is not None and factor > 0:
+                    a_med = float(np.nanmedian(a_list))
+                    b_med = float(np.nanmedian(b_list))
+                    if np.isfinite(a_med) and a_med > 0:
+                        a_cap = a_med * factor
+                        a_list = [min(a, a_cap) if np.isfinite(a) else a for a in a_list]
+                    if np.isfinite(b_med) and b_med > 0:
+                        b_cap = b_med * factor
+                        b_list = [min(b, b_cap) if np.isfinite(b) else b for b in b_list]
+
             t_u, nodes_u, a_u = _dedupe_t_points(t_nodes, nodes, a_list)
             t_u, _, b_u = _dedupe_t_points(t_nodes, nodes, b_list)
             t_axis1, axis1_u = _dedupe_t_vectors(t_nodes, axis1_list)
             t_axis2, axis2_u = _dedupe_t_vectors(t_nodes, axis2_list)
-            axis1_u = _map_vectors_to_t(t_u, t_axis1, axis1_u)
-            axis2_u = _map_vectors_to_t(t_u, t_axis2, axis2_u)
+            axis1_u = _map_vectors_to_t_linear(t_u, t_axis1, axis1_u)
+            axis2_u = _map_vectors_to_t_linear(t_u, t_axis2, axis2_u)
+            axis1_u, axis2_u = _orthonormalize_axes(axis1_u, axis2_u)
             if len(t_u) < 2:
                 continue
 
@@ -1134,18 +1380,28 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
             if min_radius > 0:
                 a_samples = np.maximum(a_samples, min_radius)
                 b_samples = np.maximum(b_samples, min_radius)
+            a_samples = np.where(np.isfinite(a_samples), a_samples, fallback_radius)
+            b_samples = np.where(np.isfinite(b_samples), b_samples, fallback_radius)
 
             seg_idx = np.searchsorted(t_u, t_samples[:-1], side="right") - 1
             seg_idx = np.clip(seg_idx, 0, len(axis1_u) - 1)
             for j in range(len(centers) - 1):
+                if sweep_min_segment_length > 0:
+                    if np.linalg.norm(centers[j + 1] - centers[j]) < sweep_min_segment_length:
+                        continue
+                axis1 = axis1_u[seg_idx[j]]
+                axis2 = axis2_u[seg_idx[j]]
+                axis1, axis2 = _project_axes_to_segment_pair(axis1, axis2, centers[j + 1] - centers[j])
+                if not (np.all(np.isfinite(axis1)) and np.all(np.isfinite(axis2))):
+                    continue
                 P0.append(centers[j])
                 P1.append(centers[j + 1])
                 A0.append(float(a_samples[j]))
                 B0.append(float(b_samples[j]))
                 A1.append(float(a_samples[j + 1]))
                 B1.append(float(b_samples[j + 1]))
-                N0.append(axis1_u[seg_idx[j]])
-                B0v.append(axis2_u[seg_idx[j]])
+                N0.append(axis1)
+                B0v.append(axis2)
 
         else:
             radii = []
@@ -1174,6 +1430,17 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
                 radii.append(float(radius))
                 last_radius = float(radius)
 
+            if sweep_radius_sanity_factor is not None:
+                try:
+                    factor = float(sweep_radius_sanity_factor)
+                except Exception:
+                    factor = None
+                if factor is not None and factor > 0 and len(radii) > 0:
+                    r_med = float(np.nanmedian(radii))
+                    if np.isfinite(r_med) and r_med > 0:
+                        cap_val = r_med * factor
+                        radii = [min(r, cap_val) if np.isfinite(r) else r for r in radii]
+
             t_u, nodes_u, r_u = _dedupe_t_points(t_nodes, nodes, radii)
             if len(t_u) < 2:
                 continue
@@ -1191,6 +1458,9 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
                 r_samples = np.maximum(r_samples, min_radius)
 
             for j in range(len(centers) - 1):
+                if sweep_min_segment_length > 0:
+                    if np.linalg.norm(centers[j + 1] - centers[j]) < sweep_min_segment_length:
+                        continue
                 P0.append(centers[j])
                 P1.append(centers[j + 1])
                 R0.append(float(r_samples[j]))
@@ -1212,6 +1482,7 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
         B1 = np.asarray(B1, dtype=np.float64)
         N0 = np.asarray(N0, dtype=np.float64)
         B0v = np.asarray(B0v, dtype=np.float64)
+        N0, B0v = _project_axes_to_segments(N0, B0v, seg_v)
     else:
         R0 = np.asarray(R0, dtype=np.float64)
         R1 = np.asarray(R1, dtype=np.float64)
@@ -1242,12 +1513,13 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
                     bb = B0v[i0:i1][None, :, :]
                     a = (1.0 - s) * a0 + s * a1
                     b = (1.0 - s) * b0 + s * b1
-                    a = np.maximum(a, 1e-6)
-                    b = np.maximum(b, 1e-6)
+                    a = np.maximum(a, 1e-4)
+                    b = np.maximum(b, 1e-4)
+                    a = np.where(np.isfinite(a), a, 1e-2)
+                    b = np.where(np.isfinite(b), b, 1e-2)
                     x = np.sum(d * n, axis=2)
                     y = np.sum(d * bb, axis=2)
-                    q = (x / a) ** 2 + (y / b) ** 2
-                    sdf = (q - 1.0) * np.minimum(a, b)
+                    sdf = _ellipse_sdf_batch(x, y, a, b, n_iter=sweep_ellipse_sdf_iters)
                 else:
                     r0 = R0[i0:i1][None, :]
                     r1 = R1[i0:i1][None, :]
@@ -1255,6 +1527,14 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
                     dist = np.linalg.norm(d, axis=2)
                     sdf = dist - r
                 best = np.minimum(best, np.min(sdf, axis=1))
+            best = np.where(np.isfinite(best), best, 1e6)
+            if sweep_sdf_clip is not None:
+                try:
+                    clip = float(sweep_sdf_clip)
+                    if clip > 0:
+                        best = np.clip(best, -clip, clip)
+                except Exception:
+                    pass
             return best.astype(np.float32)
 
         return f
@@ -1319,7 +1599,7 @@ def process_file(path, output_dir, params):
     serial = list(data.flatten())
     tree = deserialize(serial, mode=mode, k=k)
     recon_mode = params.get("recon_mode", "legacy")
-    if recon_mode not in {"legacy", "stable", "sdf_offset", "loft", "sweep", "sweep_ellipse", "sweep_fast", "sweep_ellipse_fast"}:
+    if recon_mode not in {"legacy", "legacy_branch", "legacy_branch_local", "stable", "sdf_offset", "loft", "sweep", "sweep_ellipse", "sweep_fast", "sweep_ellipse_fast"}:
         recon_mode = "legacy"
 
     base = os.path.splitext(os.path.basename(path))[0]
@@ -1515,7 +1795,7 @@ def main():
     output_dir = args.output_dir or paths.get("output_dir")
     pattern = params.get("pattern", "*.npy")
     max_files = params.get("max_files")
-    preview = bool(params.get("preview", False))
+    preview = bool(params.get("preview", False)) 
     preview_max = params.get("preview_max")
     file_progress = bool(params.get("file_progress", True))
 

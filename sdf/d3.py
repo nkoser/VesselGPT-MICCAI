@@ -640,12 +640,8 @@ def vessel3_robust(tree_points, points, splines, tck=None, sampled_spline=None, 
         for k, p in enumerate(P):
             idx = nearest_idx[k]
             c_pt = sampled_spline[idx]
-            tangent = tangents[idx]
-
-            # radial distance in normal plane
-            r_vec = p - c_pt
-            r_vec = r_vec - np.dot(r_vec, tangent) * tangent
-            radial_dist = np.linalg.norm(r_vec)
+            # use euclidean distance to avoid tangential "ghost" tubes
+            radial_dist = np.linalg.norm(p - c_pt)
 
             t = float(t_values[idx])
             t2 = min(1.0, t + delta_t) if t + delta_t <= 1.0 else max(0.0, t - delta_t)

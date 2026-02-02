@@ -2,12 +2,12 @@
 
 paths:
   # Input can be a directory or a single .npy file
-  input: '/home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput5/TreesSplines/C0001.npy'
+  input: '/home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput5/TreesSplines/C0002.npy'
   #input: 'DemoOutput/TreesSplines_20depth_prepared'  #../Data/stage1-limpias/numpy_preorder_augmented/p20/train #'DemoOutput/TreesSplines_20depth_prepared' #'../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #'DemoOutput/TreesSplines_20depth_prepared' # '../Data/stage1-limpias/numpy_preorder_augmented/p20/train' #DemoOutput/TreesSplines_20depth
   # Optional: set to a file path to save an image instead of showing a window
   # output_image: DemoOutput/TreesSplines_20depth/view.png
   # Optional: export centerline + splines as VTP
-  output_vtp: DemoOutput/TreesSplines_20depth/view.vtp
+  output_vtp: '/home/sukin707/VesselGPT/MeshOutput2/C0002_view.vtp'
   # Optional: export to separate VTP files
   # output_vtp_centerline: DemoOutput/TreesSplines_20depth/view_centerline.vtp
   # output_vtp_splines: DemoOutput/TreesSplines_20depth/view_splines.vtp

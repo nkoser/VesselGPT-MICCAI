@@ -1,7 +1,7 @@
 # Mesh reconstruction config
 
 paths:
-  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput2/TreesSplines
+  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput5/TreesSplines
   output_dir: /home/sukin707/VesselGPT/MeshOutput2
 
 params:
@@ -12,13 +12,15 @@ params:
   max_files: null
 
   # Global: Reconstruction mode
-  # legacy (notebook), stable (robust radii),
+  # legacy (notebook), legacy_branch (branch-local legacy),
+  # stable (robust radii),
   # sdf_offset (centerline shifted to contour centroids),
   # sweep (branch-local capsule sweep),
   # sweep_ellipse (branch-local elliptical sweep),
   # sweep_fast (vectorized capsule sweep),
+  # legacy_branch (branch-local legacy),
   # sweep_ellipse_fast (vectorized elliptical sweep), or loft (VTK surface)
-  recon_mode: loft
+  recon_mode: legacy
   # SDF-only (legacy/stable/robust/sdf_offset): implementation variant
   # Sweep modes ignore this and always use sdf.d3_fast.
   sdf_variant: fast
@@ -31,27 +33,32 @@ params:
   robust_fallback_radius: 0.01
   robust_min_radius: 0.01
   robust_sanity_percentile: 90
-  robust_sanity_threshold: 0.5
+  robust_sanity_threshold: 0.15
+
   # SDF-only (stable/robust/legacy): radius estimation mode
-  radius_mode: median    # median | percentile | mean | max
-  radius_percentile: 75
+  radius_mode: percentile    # median | percentile | mean | max
+  radius_percentile: 90
   # SDF-only: clamp for oversized bulges (used by stable; robust uses if supported)
-  radius_cap: 0.1 #0.25 #null
+  radius_cap: 0.05 #0.25 #null
   # SDF-only: how to pick cross-section center
-  center_mode: centroid      # node | centroid
+  center_mode: node      # node | centroid
   # stable-only: fallback radius when samples are invalid
   fallback_radius: 0.01 #0.0
   # SDF/loft: samples per spline for centroid/loft
-  spline_samples: 64         # samples per spline for centroid/loft
+  spline_samples: 128          # samples per spline for centroid/loft
 
   # sweep-only: branch-local sweep settings
   sweep_samples: 400
   sweep_radius_smooth: pchip #pchip    # pchip | spline | none
   sweep_spline_s: 0.0
   sweep_branch_smooth_k: 0.0
+  # sweep: sanity clamps for ghost-tubes
+  sweep_min_segment_length: 0.0
+  sweep_radius_sanity_factor: null
   sweep_fallback_radius: 0.02
+
   sweep_min_radius: 0.0
-  sweep_ellipse_use_pca: true
+  sweep_ellipse_use_pca: false
   sweep_centerline_mode: spline  # spline | linear
   sweep_centerline_smooth: 0.0
   sweep_segment_batch: 256
@@ -61,23 +68,23 @@ params:
   overwrite: true
 
   # SDF-only: centerline spline used to build the vessel SDF
-  centerline_samples: 200
+  centerline_samples: 1500
   centerline_smooth: 0.0
   # How to map node->centerline parameter t (optimize = exact, kdtree = fast)
   centerline_t_mode: optimize #kdtree
 
   # SDF-only: sampling (coarse -> fine)
   samples_coarse: 256    # 2**5
-  samples_fine:  524288 #1048576 #8388608 #524288  # 2**19
+  samples_fine:  1048576 #1048576 #8388608 #524288  # 2**19
   sparse: false
   use_bounds: true
   sdf_verbose: true
   file_progress: true
 
   # SDF-only: bounds strategy (auto = estimate from SDF, centerline = use tree nodes)
-  bounds_mode: centerline #centerline
-  bounds_pad_ratio: 0.02
-  bounds_pad_abs: null
+  bounds_mode: centerline
+  bounds_pad_ratio: 0.25
+  bounds_pad_abs: 0.05
   # SDF-only: smooth union between branches (helps thinning at bifurcations)
   smooth_union_k: 0.0
   # SDF-only: debug prints (bounds + robust radius)
@@ -90,10 +97,19 @@ params:
   loft_align: true
   loft_allow_flip: true
   loft_clean: true
+  loft_clean_tol: 0.00001
   loft_min_radius: 0.0
-  loft_resample_factor: 5
+  loft_resample_factor: 10
   loft_vertex_smooth: pchip   # pchip | spline | linear
   loft_vertex_spline_s: 0.0
+  # loft: ring canonicalization to reduce seams
+  loft_canonicalize: true
+  loft_center_mode: node   # node | centroid
+  loft_invalid_mode: skip  # skip | copy
+  # loft: optional normals/smoothing pass
+  loft_normals: true
+  loft_smooth: false
+  loft_smooth_iters: 30
 
   # Optional: save resampled centerlines (SDF-only)
   save_centerline: False
