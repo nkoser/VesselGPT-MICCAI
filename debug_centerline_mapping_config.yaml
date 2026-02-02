@@ -1,0 +1,37 @@
+# Debug centerline mapping config
+
+paths:
+  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines
+  output_dir: /home/sukin707/VesselGPT/MeshOutput1/centerline_debug
+
+params:
+  k: 39
+  mode: post_order
+  pattern: "*.npy"
+  max_files: 3
+
+  centerline_samples: 200
+  centerline_smooth: 0.0
+
+  node_stride: 1
+  max_nodes: null
+
+  show_connections: true
+  show_nearest: true
+  connection_alpha: 0.35
+
+  node_color: "#1f77b4"
+  nearest_color: "#d62728"
+  centerline_color: "#888888"
+  connection_color: "#2ca02c"
+
+  node_size: 8
+  nearest_size: 8
+  line_width: 1.0
+
+  elev: 20
+  azim: -60
+
+  save: true
+  show: false
+  image_ext: ".png"

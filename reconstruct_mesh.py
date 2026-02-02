@@ -1519,7 +1519,8 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
                     b = np.where(np.isfinite(b), b, 1e-2)
                     x = np.sum(d * n, axis=2)
                     y = np.sum(d * bb, axis=2)
-                    sdf = _ellipse_sdf_batch(x, y, a, b, n_iter=sweep_ellipse_sdf_iters)
+                    q = (x / a) ** 2 + (y / b) ** 2
+                    sdf = (q - 1.0) * np.minimum(a, b)
                 else:
                     r0 = R0[i0:i1][None, :]
                     r1 = R1[i0:i1][None, :]

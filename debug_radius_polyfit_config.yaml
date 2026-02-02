@@ -1,0 +1,19 @@
+# Debug polyfit overshoot config
+
+paths:
+  input: /home/sukin707/VesselGPT/Preprocessing_modular/DemoOutput1/TreesSplines
+  output_dir: /home/sukin707/VesselGPT/MeshOutput1/radius_debug
+
+params:
+  k: 39
+  mode: post_order
+  pattern: "C0001.npy"
+  max_files: 1
+
+  n_samples: 50
+  node_index: null      # set a specific node index, or leave null
+  find_worst: true      # auto-pick node with largest overshoot ratio
+
+  save: true
+  show: true
+  image_ext: ".png"
