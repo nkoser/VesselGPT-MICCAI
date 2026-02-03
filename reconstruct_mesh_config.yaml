@@ -20,7 +20,7 @@ params:
   # sweep_fast (vectorized capsule sweep),
   # legacy_branch (branch-local legacy),
   # sweep_ellipse_fast (vectorized elliptical sweep), or loft (VTK surface)
-  recon_mode: legacy
+  recon_mode: sweep_fast
   # SDF-only (legacy/stable/robust/sdf_offset): implementation variant
   # Sweep modes ignore this and always use sdf.d3_fast.
   sdf_variant: fast
@@ -48,17 +48,18 @@ params:
   spline_samples: 128          # samples per spline for centroid/loft
 
   # sweep-only: branch-local sweep settings
-  sweep_samples: 400
+  sweep_samples: 160
   sweep_radius_smooth: pchip #pchip    # pchip | spline | none
   sweep_spline_s: 0.0
   sweep_branch_smooth_k: 0.0
   # sweep: sanity clamps for ghost-tubes
-  sweep_min_segment_length: 0.0
+  sweep_min_segment_length: 0.003
   sweep_radius_sanity_factor: null
   sweep_fallback_radius: 0.02
 
   sweep_min_radius: 0.0
   sweep_ellipse_use_pca: false
+  debug_ellipse_fast: true
   sweep_centerline_mode: spline  # spline | linear
   sweep_centerline_smooth: 0.0
   sweep_segment_batch: 256
@@ -90,7 +91,7 @@ params:
   # SDF-only: debug prints (bounds + robust radius)
   debug_sdf: true
   # robust-only: debug print threshold for large scalar radii
-  robust_debug_scalar_threshold: 10.0
+  robust_debug_scalar_threshold: 10.0 
 
   # loft-only (VTK): surface settings
   loft_caps: false
@@ -99,7 +100,7 @@ params:
   loft_clean: true
   loft_clean_tol: 0.00001
   loft_min_radius: 0.0
-  loft_resample_factor: 10
+  loft_resample_factor: 15
   loft_vertex_smooth: pchip   # pchip | spline | linear
   loft_vertex_spline_s: 0.0
   # loft: ring canonicalization to reduce seams
@@ -108,8 +109,8 @@ params:
   loft_invalid_mode: skip  # skip | copy
   # loft: optional normals/smoothing pass
   loft_normals: true
-  loft_smooth: false
-  loft_smooth_iters: 30
+  loft_smooth: true
+  loft_smooth_iters: 40
 
   # Optional: save resampled centerlines (SDF-only)
   save_centerline: False

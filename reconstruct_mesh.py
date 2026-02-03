@@ -483,6 +483,24 @@ def _perpendicular_unit(v):
     return u / n
 
 
+def _node_tangent(nodes, i):
+    nodes = np.asarray(nodes, dtype=np.float64)
+    if len(nodes) == 0:
+        return np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    if len(nodes) == 1:
+        return np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    if i == 0:
+        t = nodes[1] - nodes[0]
+    elif i == len(nodes) - 1:
+        t = nodes[-1] - nodes[-2]
+    else:
+        t = nodes[i + 1] - nodes[i - 1]
+    n = np.linalg.norm(t)
+    if n < 1e-12:
+        return np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    return t / n
+
+
 def _parallel_transport_frames(points):
     points = np.asarray(points, dtype=np.float64)
     n = points.shape[0]
@@ -1094,7 +1112,6 @@ def build_sweep_ellipse_sdf(tree, k, params):
             continue
 
         t_nodes = _branch_arc_t(nodes)
-        T, N, B = _parallel_transport_frames(nodes)
 
         a_list = []
         b_list = []
@@ -1259,6 +1276,7 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
     smooth_s = float(params.get("sweep_spline_s", 0.0))
     sweep_sdf_clip = params.get("sweep_sdf_clip", None)
     sweep_ellipse_sdf_iters = int(params.get("sweep_ellipse_sdf_iters", 3))
+    debug_ellipse_fast = bool(params.get("debug_ellipse_fast", False))
     use_pca = bool(params.get("sweep_ellipse_use_pca", True))
     seg_batch = int(params.get("sweep_segment_batch", 256))
     _, _, _, sdf3_backend = get_sweep_primitives_and_union(params)
@@ -1303,18 +1321,22 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
             last_a = None
             last_b = None
             for i, (coeffs, node) in enumerate(zip(splines, nodes)):
+                tvec = _node_tangent(nodes, i)
+                n0 = _perpendicular_unit(tvec)
+                b0 = np.cross(tvec, n0)
+                b0 = b0 / (np.linalg.norm(b0) + 1e-12)
                 ring = sample_spline_coeffs(coeffs, spline_samples)
                 if ring is None or not np.all(np.isfinite(ring)):
                     a = last_a if last_a is not None else fallback_radius
                     b = last_b if last_b is not None else fallback_radius
-                    axis1 = N[i]
-                    axis2 = B[i]
+                    axis1 = n0
+                    axis2 = b0
                 else:
                     center = node
                     if center_mode == "centroid":
                         center = np.mean(ring, axis=0)
                     a, b, axis1, axis2 = _ellipse_axes_from_ring(
-                        ring, center, N[i], B[i], radius_percentile, use_pca=use_pca
+                        ring, center, n0, b0, radius_percentile, use_pca=use_pca
                     )
                 if radius_cap is not None:
                     try:
@@ -1391,7 +1413,6 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
                         continue
                 axis1 = axis1_u[seg_idx[j]]
                 axis2 = axis2_u[seg_idx[j]]
-                axis1, axis2 = _project_axes_to_segment_pair(axis1, axis2, centers[j + 1] - centers[j])
                 if not (np.all(np.isfinite(axis1)) and np.all(np.isfinite(axis2))):
                     continue
                 P0.append(centers[j])
@@ -1483,6 +1504,17 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
         N0 = np.asarray(N0, dtype=np.float64)
         B0v = np.asarray(B0v, dtype=np.float64)
         N0, B0v = _project_axes_to_segments(N0, B0v, seg_v)
+        if debug_ellipse_fast:
+            a_all = np.concatenate([A0, A1]) if A0.size and A1.size else A0
+            b_all = np.concatenate([B0, B1]) if B0.size and B1.size else B0
+            centers_all = np.vstack([P0, P1]) if len(P0) and len(P1) else P0
+            try:
+                print("ellipse_fast: a_samples min/max", np.nanmin(a_all), np.nanmax(a_all))
+                print("ellipse_fast: b_samples min/max", np.nanmin(b_all), np.nanmax(b_all))
+                print("ellipse_fast: centers min/max", np.nanmin(centers_all, axis=0), np.nanmax(centers_all, axis=0))
+                print("ellipse_fast: seg_v min/max", np.nanmin(seg_v, axis=0), np.nanmax(seg_v, axis=0))
+            except Exception:
+                pass
     else:
         R0 = np.asarray(R0, dtype=np.float64)
         R1 = np.asarray(R1, dtype=np.float64)
@@ -1513,10 +1545,11 @@ def build_sweep_fast_sdf(tree, k, params, ellipse=False):
                     bb = B0v[i0:i1][None, :, :]
                     a = (1.0 - s) * a0 + s * a1
                     b = (1.0 - s) * b0 + s * b1
-                    a = np.maximum(a, 1e-4)
-                    b = np.maximum(b, 1e-4)
-                    a = np.where(np.isfinite(a), a, 1e-2)
-                    b = np.where(np.isfinite(b), b, 1e-2)
+                    eps = 1e-6
+                    a = np.maximum(a, eps)
+                    b = np.maximum(b, eps)
+                    a = np.where(np.isfinite(a), a, fallback_radius)
+                    b = np.where(np.isfinite(b), b, fallback_radius)
                     x = np.sum(d * n, axis=2)
                     y = np.sum(d * bb, axis=2)
                     q = (x / a) ** 2 + (y / b) ** 2
