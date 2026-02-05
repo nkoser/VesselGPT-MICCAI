@@ -2,13 +2,13 @@
 
 paths:
   input_dir: '/data/Output/TreesSplines' 
-  output_dir: '/data/Output/TreesSplines_100depth'
+  output_dir: '/data/Output/TreesSplines_k_count_150depth'
 
 params:
-  max_depth: 100
+  max_depth: 150
   k: 39
   input_mode: post_order
-  output_mode: pre_order
+  output_mode: pre_order_kdir
   glob: "*.npy"
   overwrite: false
   log_every: 1

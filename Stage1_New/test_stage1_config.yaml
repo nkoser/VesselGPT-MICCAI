@@ -7,8 +7,8 @@ paths:
   compare_generated: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/recon_epoch_721_batch_0_sample_8.npy
 
 params:
-  mode: post_order
-  visualize_mode: pre_order
+  mode: pre_order_kdir
+  visualize_mode: pre_order_kdir
   k: 39
   batch_size: 1
   shuffle: true
@@ -23,7 +23,7 @@ params:
 model:
   type: vocaset
   checkpoint: models/stage1/aneux/best-model-aneux15-zero-root.pth
-  in_dim: 39
+  in_dim: 40
   hidden_size: 1024
   num_hidden_layers: 6
   num_attention_heads: 8
@@ -38,6 +38,7 @@ model:
   quantization_mode: legacy
   factor_count: 4
   factor_dim: 128
+  factor_proj: split
   emma:
     hidden_dim: 512
     codebook_size: 2048

@@ -5,6 +5,7 @@ paths:
 
 params:
   k: 39
+  mode: pre_order_kdir
   device: 0
   pattern: "*.npy"
   zero_threshold: 0.001
@@ -16,5 +17,5 @@ params:
   strict_load: true
 
 model:
-  in_dim: 39
+  in_dim: 40
   n_embed: 256

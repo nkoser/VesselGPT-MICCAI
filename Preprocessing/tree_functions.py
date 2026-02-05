@@ -145,12 +145,142 @@ def serialize_pre_order_k(tree, k = 4):
     if tree == None: return [0.0] * k
     return [tree.data["x"], tree.data["y"], tree.data["z"]] + list(tree.data["r"]) + serialize_pre_order_k(tree.left, k) + serialize_pre_order_k(tree.right, k)
 
+def serialize_pre_order_kcount(tree, k=4):
+
+    if tree is None:
+        return []
+
+    if tree.left is not None and tree.right is not None:
+        children = [tree.left, tree.right]
+        k_children = 2
+    elif tree.left is not None:
+        children = [tree.left]
+        k_children = 1
+    elif tree.right is not None:
+        children = [tree.right]
+        k_children = 1
+    else:
+        children = []
+        k_children = 0
+
+    if k == 4:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"], tree.data["r"]]
+    else:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"]] + list(tree.data["r"])
+
+    serial = [float(k_children)] + attrs
+    for child in children:
+        serial.extend(serialize_pre_order_kcount(child, k))
+    return serial
+
 def deserialize(serial, mode = "pre_order", k = 4):
 
     if mode == "pre_order": return deserialize_pre_order_k(serial, k)[0]
     if mode == "post_order": return deserialize_post_order_k(serial, k)
+    if mode in {"pre_order_kcount", "pre_order_k"}:
+        return deserialize_pre_order_kcount(serial, k)[0]
+    if mode in {"pre_order_kdir", "pre_order_k_lr"}:
+        return deserialize_pre_order_kdir(serial, k)[0]
 
     print("UNSUPPORTED DESERIALIZATION MODE")
+
+def deserialize_pre_order_kcount(serial, k=4):
+
+    serial = serial.copy()
+
+    def parse(seq):
+        if len(seq) < 1 + k:
+            return None, seq
+
+        k_children = int(seq.pop(0))
+
+        data = {
+            "x": seq.pop(0),
+            "y": seq.pop(0),
+            "z": seq.pop(0),
+        }
+        if k == 4:
+            data["r"] = seq.pop(0)
+        else:
+            data["r"] = [seq.pop(0) for _ in range(k - 3)]
+
+        tree = Tree(data)
+
+        if k_children == 0:
+            return tree, seq
+        if k_children >= 1:
+            left, seq = parse(seq)
+            tree.left = left
+        if k_children >= 2:
+            right, seq = parse(seq)
+            tree.right = right
+
+        return tree, seq
+
+    return parse(serial)
+
+def serialize_pre_order_kdir(tree, k=4):
+
+    if tree is None:
+        return []
+
+    if tree.left is not None and tree.right is not None:
+        children = [tree.left, tree.right]
+        k_children = 3
+    elif tree.left is not None:
+        children = [tree.left]
+        k_children = 1
+    elif tree.right is not None:
+        children = [tree.right]
+        k_children = 2
+    else:
+        children = []
+        k_children = 0
+
+    if k == 4:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"], tree.data["r"]]
+    else:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"]] + list(tree.data["r"])
+
+    serial = [float(k_children)] + attrs
+    for child in children:
+        serial.extend(serialize_pre_order_kdir(child, k))
+    return serial
+
+def deserialize_pre_order_kdir(serial, k=4):
+
+    serial = serial.copy()
+
+    def parse(seq):
+        if len(seq) < 1 + k:
+            return None, seq
+
+        k_children = int(seq.pop(0))
+
+        data = {
+            "x": seq.pop(0),
+            "y": seq.pop(0),
+            "z": seq.pop(0),
+        }
+        if k == 4:
+            data["r"] = seq.pop(0)
+        else:
+            data["r"] = [seq.pop(0) for _ in range(k - 3)]
+
+        tree = Tree(data)
+
+        if k_children == 0:
+            return tree, seq
+        if k_children in (1, 3):
+            left, seq = parse(seq)
+            tree.left = left
+        if k_children in (2, 3):
+            right, seq = parse(seq)
+            tree.right = right
+
+        return tree, seq
+
+    return parse(serial)
 
 def tokens_to_data(tokens, device, decoder, null_id=None):
 

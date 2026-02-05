@@ -94,6 +94,8 @@ def main():
     device = resolve_device(params.get("device", 0))
     pattern = params.get("pattern", "*.npy")
     k = int(params.get("k", 39))
+    mode = params.get("mode", "pre_order")
+    node_dim = k + 1 if mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"} else k
     zero_threshold = float(params.get("zero_threshold", 1e-3))
     overwrite = bool(params.get("overwrite", False))
     add_bos_eos = bool(params.get("add_bos_eos", False))
@@ -126,11 +128,15 @@ def main():
 
         data = np.load(file_path)
         if data.ndim == 1:
-            data = data.reshape((-1, k))
-        if data.shape[1] != k:
-            raise ValueError(f"{file_path} has {data.shape[1]} features, expected {k}.")
+            data = data.reshape((-1, node_dim))
+        if data.shape[1] != node_dim:
+            raise ValueError(f"{file_path} has {data.shape[1]} features, expected {node_dim}.")
 
-        zero_mask = np.all(np.abs(data) <= zero_threshold, axis=1)
+        if mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"}:
+            data_attrs = data[:, 1:]
+        else:
+            data_attrs = data
+        zero_mask = np.all(np.abs(data_attrs) <= zero_threshold, axis=1)
         tokens_per_row = int(args_cfg.face_quan_num)
         if zero_mask.all():
             tokens = torch.full((data.shape[0] * tokens_per_row,), null_id, dtype=torch.long)

@@ -286,6 +286,7 @@ def main():
     args_cfg.factor_count = int(params.get("factor_count", args_cfg.factor_count))
     args_cfg.factor_dim = int(params.get("factor_dim", args_cfg.factor_dim))
     args_cfg.face_quan_num = int(params.get("face_quan_num", args_cfg.face_quan_num))
+    args_cfg.factor_proj = params.get("factor_proj", args_cfg.factor_proj)
 
     model = VQAutoEncoder(args_cfg).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)

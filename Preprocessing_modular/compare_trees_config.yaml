@@ -8,8 +8,8 @@ paths:
 
 params:
   k: 39
-  mode_a: pre_order
-  mode_b: pre_order
+  mode_a: pre_order_kdir
+  mode_b: pre_order_kdir
   # threshold_a: 1e-3
   threshold_b: 1e-3
   # mask_threshold: 1e-3

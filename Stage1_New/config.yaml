@@ -1,14 +1,14 @@
 # Stage1 training config
 
 paths:
-  train_dir: '/data/Output/TreesSplines_100depth_prepared/train'
-  val_dir: '/data/Output/TreesSplines_100depth_prepared/val'
-  output_dir: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_04'
+  train_dir: '/data/Output/TreesSplines_k_count_150depth_prepared/train'
+  val_dir: '/data/Output/TreesSplines_k_count_150depth_prepared/val'
+  output_dir: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_06'
 
 params:
   k: 39
-  in_dim: 39
-  mode: post_order  # keep as-is when data is already pre_order
+  in_dim: 40
+  mode: pre_order_kdir  # K-token with left/right + attributes
   batch_size: 48
   batch_size_val: 1
   base_lr: 0.0005
@@ -36,6 +36,8 @@ params:
   # Factorized mode settings (only used if quantization_mode=factorized)
   factor_count: 4
   factor_dim: 128  # hidden dimension factor_count*factor_dim = hidden_size
+  # Factor projection: split | linear_shared | linear_per_factor
+  factor_proj: linear_shared
 
   gamma: 0.9
   seed: 125
@@ -56,7 +58,7 @@ logging:
 wandb:
   enabled: true
   entity: VesselGPT
-  project: VesselGPT_VQVAE_DGX_04
+  project: VesselGPT_VQVAE_DGX_06
   mode: online
   watch: true
   # run_name: your_run_name_here

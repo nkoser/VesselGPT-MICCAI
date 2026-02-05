@@ -14,7 +14,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from tree_functions import deserialize_post_order_k, serialize_pre_order_k
+from tree_functions import deserialize, serialize_pre_order_k, serialize_pre_order_kcount, serialize_pre_order_kdir
 
 
 class TreeDepthCutter:
@@ -57,6 +57,8 @@ class TreeDepthCutter:
     def process_file(self, file_path):
         max_depth = int(self.params.get("max_depth", 20))
         k = int(self.params.get("k", 39))
+        input_mode = self.params.get("input_mode", "post_order")
+        output_mode = self.params.get("output_mode", "pre_order")
         output_dir = self.paths.get("output_dir")
         overwrite = bool(self.params.get("overwrite", False))
 
@@ -69,13 +71,24 @@ class TreeDepthCutter:
             return "skip", out_path, None
 
         data = np.load(file_path)
+        node_dim = k + 1 if input_mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"} else k
+        if data.ndim == 1:
+            data = data.reshape((-1, node_dim))
         serial_tree = list(data.flatten())
-        tree = deserialize_post_order_k(serial_tree, k=k)
+        tree = deserialize(serial_tree, mode=input_mode, k=k)
         decoded = self.remove_below_level(tree, max_depth)
-        vec = serialize_pre_order_k(decoded, k=k)
+        if output_mode in {"pre_order_kcount", "pre_order_k"}:
+            vec = serialize_pre_order_kcount(decoded, k=k)
+            node_dim = k + 1
+        elif output_mode in {"pre_order_kdir", "pre_order_k_lr"}:
+            vec = serialize_pre_order_kdir(decoded, k=k)
+            node_dim = k + 1
+        else:
+            vec = serialize_pre_order_k(decoded, k=k)
+            node_dim = k
 
-        np.save(out_path, np.array(vec, dtype=np.float32))
-        return "ok", out_path, len(vec) / k
+        np.save(out_path, np.array(vec, dtype=np.float32).reshape((-1, node_dim)))
+        return "ok", out_path, len(vec) / node_dim
 
     def run(self):
         files = self._iter_files()

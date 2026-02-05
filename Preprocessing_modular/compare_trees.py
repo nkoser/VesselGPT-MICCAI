@@ -29,8 +29,9 @@ def load_config(path):
 
 def load_tree(file_path, k, mode, threshold, zero_mask=None):
     data = np.load(file_path)
+    node_dim = k + 1 if mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"} else k
     if data.ndim == 1:
-        data = data.reshape((-1, k))
+        data = data.reshape((-1, node_dim))
     if zero_mask is not None:
         data = data.copy()
         data[zero_mask] = 0

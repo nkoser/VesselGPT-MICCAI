@@ -46,11 +46,11 @@ def rotation_matrix(angle_degrees, axis):
 
 
 def zero_root(data, mode):
-    if mode not in {"pre_order", "post_order"}:
-        raise ValueError("mode must be pre_order or post_order")
+    if mode not in {"pre_order", "post_order", "pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"}:
+        raise ValueError("mode must be pre_order, post_order, or pre_order_kcount")
     root = data[0, :3] if mode == "pre_order" else data[-1, :3]
     not_zero_mask = np.mean(data, axis=1) != 0
-    data[not_zero_mask, :3] = data[not_zero_mask, :3] - root
+    data[not_zero_mask, :3] = data[not_zero_mask, :3] - root 
     return data, root, not_zero_mask
 
 
@@ -250,14 +250,21 @@ def process_file(
     refit_splines,
 ):
     data = np.load(file_path)
+    mode_is_kcount = mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"}
+    node_dim = k + 1 if mode_is_kcount else k
     if data.ndim == 1:
-        data = data.reshape((-1, k))
-    base = np.array(data, dtype=np.float32).reshape((-1, k))
+        data = data.reshape((-1, node_dim))
+    base = np.array(data, dtype=np.float32).reshape((-1, node_dim))
+    kcol = None
+    if mode_is_kcount and base.shape[1] == k + 1:
+        kcol = base[:, :1]
+        base = base[:, 1:]
+    mode_for_attrs = "pre_order" if mode_is_kcount else mode
 
     if k == 39:
         outputs = build_spline_dataset(
             base,
-            mode,
+            mode_for_attrs,
             n_rotations,
             n_samples,
             smooth,
@@ -266,7 +273,7 @@ def process_file(
             refit_splines,
         )
     else:
-        base, _root, not_zero_mask = zero_root(base, mode)
+        base, _root, not_zero_mask = zero_root(base, mode_for_attrs)
         outputs = [base]
         for i in range(n_rotations):
             angle = random.randint(10, 350)
@@ -275,6 +282,9 @@ def process_file(
             rotated = base.copy()
             rotated[not_zero_mask, :3] = rotated[not_zero_mask, :3] @ rot.T
             outputs.append(rotated)
+
+    if kcol is not None:
+        outputs = [np.hstack((kcol, arr)) for arr in outputs]
 
     written = 0
     skipped = 0
@@ -301,7 +311,7 @@ def main():
     parser.add_argument("--input", default=None, help="Input folder with .npy trees")
     parser.add_argument("--output", default=None, help="Output folder")
     parser.add_argument("--k", type=int, default=39, help="Feature dimension (default: 39)")
-    parser.add_argument("--mode", default="pre_order", choices=["pre_order", "post_order"])
+    parser.add_argument("--mode", default="pre_order", choices=["pre_order", "post_order", "pre_order_kcount", "pre_order_k"])
     parser.add_argument("--n-rotations", type=int, default=0)
     parser.add_argument("--pattern", default="*.npy")
     parser.add_argument("--overwrite", action="store_true")

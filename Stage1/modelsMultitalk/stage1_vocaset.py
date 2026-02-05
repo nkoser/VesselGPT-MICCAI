@@ -15,10 +15,19 @@ class VQAutoEncoder(BaseModel):
         self.encoder = TransformerEncoder(args)
         self.decoder = TransformerDecoder(args, args.in_dim)
         self.use_factorized = getattr(args, "quantization_mode", "legacy") == "factorized"
+        self.factor_proj_mode = getattr(args, "factor_proj", "split")
         if self.use_factorized:
             self.quantizers = nn.ModuleList(
                 [VectorQuantizer(args.n_embed, args.factor_dim, beta=0.25) for _ in range(args.factor_count)]
             )
+            if self.factor_proj_mode == "linear_shared":
+                self.factor_proj = nn.Linear(args.hidden_size, args.factor_count * args.factor_dim)
+            elif self.factor_proj_mode == "linear_per_factor":
+                self.factor_proj = nn.ModuleList(
+                    [nn.Linear(args.hidden_size, args.factor_dim) for _ in range(args.factor_count)]
+                )
+            else:
+                self.factor_proj = None
         else:
             self.quantize = VectorQuantizer(args.n_embed,
                                             args.zquant_dim,
@@ -42,7 +51,13 @@ class VQAutoEncoder(BaseModel):
     def encode(self, x, x_a=None): 
         h = self.encoder(x) ## x --> z'
         if self.use_factorized:
-            h = h.view(x.shape[0], -1, self.args.factor_count, self.args.factor_dim)
+            if self.factor_proj_mode == "linear_shared":
+                h = self.factor_proj(h)
+                h = h.view(x.shape[0], -1, self.args.factor_count, self.args.factor_dim)
+            elif self.factor_proj_mode == "linear_per_factor":
+                h = torch.stack([proj(h) for proj in self.factor_proj], dim=2)
+            else:
+                h = h.view(x.shape[0], -1, self.args.factor_count, self.args.factor_dim)
             quant_list = []
             loss_list = []
             info_list = []

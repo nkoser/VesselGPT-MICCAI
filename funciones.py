@@ -36,6 +36,8 @@ class Args:
         self.quantization_mode = "legacy"
         self.factor_count = 4
         self.factor_dim = 128
+        # factor projection: split | linear_shared | linear_per_factor
+        self.factor_proj = "split"
 
         # VQuantizer settings
         self.n_embed = 256
@@ -133,12 +135,142 @@ def serialize_pre_order(tree, k):
     if tree == None: return [0.0] * k
     return list(tree.data.values())[::-1] + serialize_pre_order(tree.left) + serialize_pre_order(tree.right)
 
+def serialize_pre_order_kcount(tree, k=4):
+
+    if tree is None:
+        return []
+
+    if tree.left is not None and tree.right is not None:
+        children = [tree.left, tree.right]
+        k_children = 2
+    elif tree.left is not None:
+        children = [tree.left]
+        k_children = 1
+    elif tree.right is not None:
+        children = [tree.right]
+        k_children = 1
+    else:
+        children = []
+        k_children = 0
+
+    if k == 4:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"], tree.data["r"]]
+    else:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"]] + list(tree.data["r"])
+
+    serial = [float(k_children)] + attrs
+    for child in children:
+        serial.extend(serialize_pre_order_kcount(child, k))
+    return serial
+
 def deserialize(serial, mode = "pre_order"):
 
     if mode == "pre_order": return deserialize_pre_order(serial)[0]
     if mode == "post_order": return deserialize_post_order(serial)
+    if mode in {"pre_order_kcount", "pre_order_k"}:
+        return deserialize_pre_order_kcount(serial)[0]
+    if mode in {"pre_order_kdir", "pre_order_k_lr"}:
+        return deserialize_pre_order_kdir(serial)[0]
 
     print("UNSUPPORTED DESERIALIZATION MODE")
+
+def deserialize_pre_order_kcount(serial, k=4):
+
+    serial = serial.copy()
+
+    def parse(seq):
+        if len(seq) < 1 + k:
+            return None, seq
+
+        k_children = int(seq.pop(0))
+
+        data = {
+            "x": seq.pop(0),
+            "y": seq.pop(0),
+            "z": seq.pop(0),
+        }
+        if k == 4:
+            data["r"] = seq.pop(0)
+        else:
+            data["r"] = [seq.pop(0) for _ in range(k - 3)]
+
+        tree = Tree(data)
+
+        if k_children == 0:
+            return tree, seq
+        if k_children >= 1:
+            left, seq = parse(seq)
+            tree.left = left
+        if k_children >= 2:
+            right, seq = parse(seq)
+            tree.right = right
+
+        return tree, seq
+
+    return parse(serial)
+
+def serialize_pre_order_kdir(tree, k=4):
+
+    if tree is None:
+        return []
+
+    if tree.left is not None and tree.right is not None:
+        children = [tree.left, tree.right]
+        k_children = 3
+    elif tree.left is not None:
+        children = [tree.left]
+        k_children = 1
+    elif tree.right is not None:
+        children = [tree.right]
+        k_children = 2
+    else:
+        children = []
+        k_children = 0
+
+    if k == 4:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"], tree.data["r"]]
+    else:
+        attrs = [tree.data["x"], tree.data["y"], tree.data["z"]] + list(tree.data["r"])
+
+    serial = [float(k_children)] + attrs
+    for child in children:
+        serial.extend(serialize_pre_order_kdir(child, k))
+    return serial
+
+def deserialize_pre_order_kdir(serial, k=4):
+
+    serial = serial.copy()
+
+    def parse(seq):
+        if len(seq) < 1 + k:
+            return None, seq
+
+        k_children = int(seq.pop(0))
+
+        data = {
+            "x": seq.pop(0),
+            "y": seq.pop(0),
+            "z": seq.pop(0),
+        }
+        if k == 4:
+            data["r"] = seq.pop(0)
+        else:
+            data["r"] = [seq.pop(0) for _ in range(k - 3)]
+
+        tree = Tree(data)
+
+        if k_children == 0:
+            return tree, seq
+        if k_children in (1, 3):
+            left, seq = parse(seq)
+            tree.left = left
+        if k_children in (2, 3):
+            right, seq = parse(seq)
+            tree.right = right
+
+        return tree, seq
+
+    return parse(serial)
     
 class IntraDataset(Dataset):
 
@@ -175,7 +307,16 @@ class IntraDataset(Dataset):
         
         # Convert to tensor only when accessed
         tree_tensor = torch.tensor(tree_data_np, dtype=torch.float32)
-        tree_tensor = tree_tensor.reshape((-1,39))
+        if tree_tensor.dim() == 2:
+            file_dim = tree_tensor.shape[1]
+        else:
+            file_dim = None
+        if file_dim is None:
+            if self.mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"}:
+                file_dim = 40 if (tree_tensor.numel() % 40 == 0) else 39
+            else:
+                file_dim = 39
+        tree_tensor = tree_tensor.reshape((-1, file_dim))
 
         if self.mode == "pre_order":
 
@@ -187,6 +328,26 @@ class IntraDataset(Dataset):
             serial_tree = serialize_pre_order(tree, k=39)
             np_tree = np.array(serial_tree).reshape((-1,39))
             tree_tensor = torch.tensor(np_tree, dtype = torch.float32)
+
+        if self.mode in {"pre_order_kcount", "pre_order_k"}:
+
+            if file_dim == 40:
+                return tree_tensor if not self.val else (tree_tensor, file_path)
+            serial_tree = list(tree_tensor.flatten().numpy())
+            tree = deserialize(serial_tree, mode="post_order")
+            serial_tree = serialize_pre_order_kcount(tree, k=39)
+            np_tree = np.array(serial_tree).reshape((-1, 40))
+            tree_tensor = torch.tensor(np_tree, dtype=torch.float32)
+
+        if self.mode in {"pre_order_kdir", "pre_order_k_lr"}:
+
+            if file_dim == 40:
+                return tree_tensor if not self.val else (tree_tensor, file_path)
+            serial_tree = list(tree_tensor.flatten().numpy())
+            tree = deserialize(serial_tree, mode="post_order")
+            serial_tree = serialize_pre_order_kdir(tree, k=39)
+            np_tree = np.array(serial_tree).reshape((-1, 40))
+            tree_tensor = torch.tensor(np_tree, dtype=torch.float32)
 
             
         if not self.val:

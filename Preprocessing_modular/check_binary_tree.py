@@ -73,7 +73,7 @@ def main():
     parser = argparse.ArgumentParser(description="Visualize tree and highlight non-binary nodes.")
     parser.add_argument("--input", required=True, help="Input folder or file")
     parser.add_argument("--k", type=int, default=39, help="Feature dimension (default: 39)")
-    parser.add_argument("--mode", default="pre_order", choices=["pre_order", "post_order"])
+    parser.add_argument("--mode", default="pre_order", choices=["pre_order", "post_order", "pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"])
     parser.add_argument("--pattern", default="*.npy")
     parser.add_argument("--file_name", default=None)
     parser.add_argument("--file_index", type=int, default=None)
@@ -86,8 +86,9 @@ def main():
     file_path = pick_file(files, args.file_index, args.file_name)
 
     data = np.load(file_path)
+    node_dim = args.k + 1 if args.mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"} else args.k
     if data.ndim == 1:
-        data = data.reshape((-1, args.k))
+        data = data.reshape((-1, node_dim))
 
     serial = list(data.flatten())
     tree = deserialize(serial, mode=args.mode, k=args.k)

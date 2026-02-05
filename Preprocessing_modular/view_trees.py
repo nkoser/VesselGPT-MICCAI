@@ -435,10 +435,11 @@ def main():
 
     k = int(params.get("k", 39))
     mode = params.get("mode", "pre_order")
+    node_dim = k + 1 if mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"} else k
 
     data = np.load(file_path)
     if data.ndim == 1:
-        data = data.reshape((-1, k))
+        data = data.reshape((-1, node_dim))
 
     serial = list(data.flatten())
     tree = deserialize(serial, mode=mode, k=k)

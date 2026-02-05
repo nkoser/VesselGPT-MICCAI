@@ -79,6 +79,7 @@ class Args:
         self.quantization_mode = "legacy"
         self.factor_count = 4
         self.factor_dim = 128
+        self.factor_proj = "split"
 
 
 def build_args(model_cfg):
@@ -160,6 +161,8 @@ def compare_example(cfg):
     paths = cfg.get("paths", {})
     params = cfg.get("params", {})
     k = int(params.get("k", 39))
+    mode = params.get("mode", "pre_order")
+    node_dim = k + 1 if mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"} else k
 
     original_path = paths.get("compare_original")
     generated_path = paths.get("compare_generated")
@@ -168,8 +171,8 @@ def compare_example(cfg):
         print("compare_original or compare_generated not set. Skipping compare.")
         return
 
-    original = np.load(original_path).reshape(-1, k)
-    generated = np.load(generated_path).reshape(-1, k)
+    original = np.load(original_path).reshape(-1, node_dim)
+    generated = np.load(generated_path).reshape(-1, node_dim)
 
     print("original shape:", original.shape)
     print("generated shape:", generated.shape)
@@ -184,6 +187,7 @@ def visualize_example(cfg):
     params = cfg.get("params", {})
     k = int(params.get("k", 39))
     mode = params.get("visualize_mode", "pre_order")
+    node_dim = k + 1 if mode in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"} else k
 
     original_path = paths.get("compare_original")
     generated_path = paths.get("compare_generated")
@@ -195,8 +199,8 @@ def visualize_example(cfg):
     from tree_functions import deserialize
     from Preprocessing.tree_viewer import draw_tree_splines
 
-    original = np.load(original_path).reshape(-1, k)
-    generated = np.load(generated_path).reshape(-1, k)
+    original = np.load(original_path).reshape(-1, node_dim)
+    generated = np.load(generated_path).reshape(-1, node_dim)
 
     serial = list(original.flatten())
     tree = deserialize(serial, mode=mode, k=k)

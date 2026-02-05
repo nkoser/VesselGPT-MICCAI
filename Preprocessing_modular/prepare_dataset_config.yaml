@@ -1,12 +1,12 @@
 # Dataset preparation config
 
 paths:
-  input: /data/Output/TreesSplines_100depth
-  output: /data/Output/TreesSplines_100depth_prepared
+  input: /data/Output/TreesSplines_k_count_150depth
+  output: /data/Output/TreesSplines_k_count_150depth_prepared
 
 params:
   k: 39
-  mode: pre_order
+  mode: pre_order_kdir
   n_rotations: 10
   pattern: "*.npy"
   overwrite: false
@@ -16,4 +16,4 @@ params:
   enable_rotation: false
   enable_scaling: true
   refit_splines: false
-  erase_output: true
+  erase_output: true 
