@@ -14,15 +14,47 @@ class VQAutoEncoder(BaseModel):
         super().__init__()
         self.encoder = TransformerEncoder(args)
         self.decoder = TransformerDecoder(args, args.in_dim)
-        self.quantize = VectorQuantizer(args.n_embed,
-                                        args.zquant_dim,
-                                        beta=0.25)
+        self.use_factorized = getattr(args, "quantization_mode", "legacy") == "factorized"
+        if self.use_factorized:
+            self.quantizers = nn.ModuleList(
+                [VectorQuantizer(args.n_embed, args.factor_dim, beta=0.25) for _ in range(args.factor_count)]
+            )
+        else:
+            self.quantize = VectorQuantizer(args.n_embed,
+                                            args.zquant_dim,
+                                            beta=0.25)
         self.args = args
+        if self.use_factorized:
+            expected = args.factor_count * args.factor_dim
+            if args.hidden_size != expected:
+                raise ValueError(
+                    f"hidden_size ({args.hidden_size}) must equal factor_count * factor_dim ({expected})"
+                )
+        else:
+            expected = args.face_quan_num * args.zquant_dim
+            if args.hidden_size != expected:
+                raise ValueError(
+                    f"hidden_size ({args.hidden_size}) must equal face_quan_num * zquant_dim ({expected})"
+                )
 
 
 
     def encode(self, x, x_a=None): 
         h = self.encoder(x) ## x --> z'
+        if self.use_factorized:
+            h = h.view(x.shape[0], -1, self.args.factor_count, self.args.factor_dim)
+            quant_list = []
+            loss_list = []
+            info_list = []
+            for i in range(self.args.factor_count):
+                q, loss, info = self.quantizers[i](h[:, :, i, :])
+                quant_list.append(q)
+                loss_list.append(loss)
+                info_list.append(info)
+            quant = torch.cat(quant_list, dim=1)
+            emb_loss = torch.stack(loss_list).mean()
+            info = info_list
+            return quant, emb_loss, info
         h = h.view(x.shape[0], -1, self.args.face_quan_num, self.args.zquant_dim)
         h = h.view(x.shape[0], -1, self.args.zquant_dim)
         quant, emb_loss, info = self.quantize(h) ## finds nearest quantization
@@ -43,6 +75,8 @@ class VQAutoEncoder(BaseModel):
         return dec
     
     def decode(self, quant):
+        if self.use_factorized:
+            return self.decoder(quant)
         # Assuming quant has the shape (batch_size, num_tokens, zquant_dim)
         # Step 1: Reshape or permute the input tensor as required by your model
         # Change the shape to (B, num_tokens, zquant_dim) if needed
@@ -81,8 +115,12 @@ class VQAutoEncoder(BaseModel):
         quant_z, _, info = self.encode(x, x_a)
         
         x_sample_det = self.decode(quant_z)
-        btc = quant_z.shape[0], quant_z.shape[2], quant_z.shape[1]
-        indices = info[2]
+        if self.use_factorized:
+            btc = quant_z.shape[0], quant_z.shape[2], self.args.factor_dim
+            indices = [item[2] for item in info]
+        else:
+            btc = quant_z.shape[0], quant_z.shape[2], quant_z.shape[1]
+            indices = info[2]
         x_sample_check = self.decode_to_img(indices, btc)
         return x_sample_det, x_sample_check
     
@@ -96,13 +134,13 @@ class VQAutoEncoder(BaseModel):
     def get_quant_no_grad(self, x, x_a=None):
 
         quant_z, _, info = self.encode(x, x_a)
-        indices = info[2]
+        indices = [item[2] for item in info] if self.use_factorized else info[2]
         return quant_z, indices
     
     def get_quant(self, x, x_a=None):
 
         quant_z, _, info = self.encode(x, x_a)
-        indices = info[2]
+        indices = [item[2] for item in info] if self.use_factorized else info[2]
         return quant_z, indices
 
     def get_distances(self, x):
@@ -117,6 +155,16 @@ class VQAutoEncoder(BaseModel):
 
     @torch.no_grad()
     def entry_to_feature(self, index, zshape):
+        if self.use_factorized:
+            if not isinstance(index, (list, tuple)):
+                raise ValueError("factorized mode expects a list of indices")
+            quant_list = []
+            for i, idx in enumerate(index):
+                idx = idx.long()
+                quant_i = self.quantizers[i].get_codebook_entry(idx.reshape(-1), shape=None)
+                quant_i = torch.reshape(quant_i, zshape)
+                quant_list.append(quant_i)
+            return torch.cat(quant_list, dim=1)
         index = index.long()
         quant_z = self.quantize.get_codebook_entry(index.reshape(-1),
                                                    shape=None)
@@ -127,6 +175,18 @@ class VQAutoEncoder(BaseModel):
 
     @torch.no_grad()
     def decode_to_img(self, index, zshape):
+        if self.use_factorized:
+            if not isinstance(index, (list, tuple)):
+                raise ValueError("factorized mode expects a list of indices")
+            quant_list = []
+            for i, idx in enumerate(index):
+                idx = idx.long()
+                quant_i = self.quantizers[i].get_codebook_entry(idx.reshape(-1), shape=None)
+                quant_i = torch.reshape(quant_i, zshape).permute(0, 2, 1)
+                quant_list.append(quant_i)
+            quant_z = torch.cat(quant_list, dim=1)
+            x = self.decode(quant_z)
+            return x
         index = index.long()
         quant_z = self.quantize.get_codebook_entry(index.reshape(-1),
                                                    shape=None)

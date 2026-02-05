@@ -4,4 +4,16 @@
 /wandb
 /Etapa1/modelos-entrenados/aneurisk-limpio-splines.pth
 /Aneux/models
+#/Preprocessing/__pycache__
+/.vscode
+__pycache__
+*/__pycache__ 
+*.pyc
+/Stage1/
+/Stage1_New/wandb 
+/Stage1_New/Stage1_New/reconstructions_stage1/*
+/Preprocessing_modular/DemoOutput5 
 *.pth
+**/__pycache__/ 
+Stage1/base/__pycache__/__init__.cpython-311.pyc
+Stage1/base/__pycache__/base_model.cpython-311.pyc

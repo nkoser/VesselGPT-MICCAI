@@ -35,6 +35,9 @@ model:
   INaffine: false
   n_embed: 256
   zquant_dim: 64
+  quantization_mode: legacy
+  factor_count: 4
+  factor_dim: 128
   emma:
     hidden_dim: 512
     codebook_size: 2048

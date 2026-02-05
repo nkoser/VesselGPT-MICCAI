@@ -1,8 +1,8 @@
 # Dataset preparation config
 
 paths:
-  input: DemoOutput1/TreesSplines_20depth
-  output: DemoOutput1/TreesSplines_20depth_prepared
+  input: /data/Output/TreesSplines_100depth
+  output: /data/Output/TreesSplines_100depth_prepared
 
 params:
   k: 39

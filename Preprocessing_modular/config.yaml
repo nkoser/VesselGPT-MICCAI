@@ -2,10 +2,10 @@
 
 paths:
   # Folder that contains raw .vtp meshes.
-  raw_root: '/home/sukin707/VesselGPT/DemoData1'
+  raw_root: '/data/DemoData'
 
   # Root folder where all outputs will be created.
-  output_root: 'DemoOutput5'
+  output_root: '/data/Output'
 
   # Optional overrides (uncomment to customize individual paths)
   # raw_meshes: ../modelsRaw

@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
+from torch.nn.utils.rnn import pad_sequence
 
 try:
     import yaml
@@ -28,6 +29,17 @@ from Stage1.modelsMultitalk.stage1_vocaset import VQAutoEncoder
 from Stage1.base.utilities import AverageMeter
 from funciones import IntraDataset, save_best_model, Args
 from Stage1.metrics.loss import calc_vq_loss
+
+
+print("torch:", torch.__version__)
+print("cuda available:", torch.cuda.is_available())
+print("cuda version:", torch.version.cuda)
+print("device count:", torch.cuda.device_count())
+if torch.cuda.is_available():
+    print("gpu:", torch.cuda.get_device_name(0))
+
+print("cudnn enabled:", torch.backends.cudnn.enabled) 
+print("cudnn version:", torch.backends.cudnn.version())
 
 
 def load_config(path):
@@ -67,9 +79,17 @@ def build_loader(
     pin_memory=False,
     persistent_workers=False,
     prefetch_factor=None,
+    use_padding=False,
 ):
     files = iter_files(folder)
     dataset = IntraDataset(files, root_dir=folder, mode=mode)
+    def pad_collate(batch):
+        if isinstance(batch[0], (list, tuple)):
+            tensors = [item[0] for item in batch]
+            paths = [item[1] for item in batch]
+            padded = pad_sequence(tensors, batch_first=True, padding_value=0.0)
+            return padded, paths
+        return pad_sequence(batch, batch_first=True, padding_value=0.0)
     loader_kwargs = {
         "batch_size": batch_size,
         "shuffle": shuffle,
@@ -77,6 +97,8 @@ def build_loader(
         "pin_memory": pin_memory,
         "persistent_workers": persistent_workers if num_workers > 0 else False,
     }
+    if use_padding:
+        loader_kwargs["collate_fn"] = pad_collate
     if prefetch_factor is not None and num_workers > 0:
         loader_kwargs["prefetch_factor"] = prefetch_factor
     loader = DataLoader(dataset, **loader_kwargs)
@@ -87,7 +109,7 @@ def calc_vq_loss_masked(pred, target, quant_loss, quant_loss_weight, mask=None):
     if mask is None:
         return calc_vq_loss(pred, target, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight)
     diff = torch.abs(pred - target)
-    valid = ~mask.unsqueeze(-1)
+    valid = (~mask).unsqueeze(-1).expand_as(diff)
     if valid.any():
         rec_loss = diff[valid].mean()
     else:
@@ -122,13 +144,19 @@ def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight, ma
         rec_loss_meter.update(loss_details[0].item(), 1)
         quant_loss_meter.update(loss_details[1].item(), 1)
         total_loss_meter.update(loss.item(), 1)
-        if info is not None and len(info) > 0:
-            pp_meter.update(info[0].mean().item(), 1)
+        if info is not None:
+            if isinstance(info, (list, tuple)) and len(info) > 0 and isinstance(info[0], (list, tuple)):
+                # factorized: list of (perplexity, min_encodings, min_indices)
+                perplexities = [item[0] for item in info]
+                pp_meter.update(torch.stack(perplexities).mean().item(), 1)
+            elif isinstance(info, (list, tuple)) and len(info) > 0:
+                # legacy: (perplexity, min_encodings, min_indices)
+                pp_meter.update(info[0].mean().item(), 1)
 
     return total_loss_meter.avg, rec_loss_meter.avg, quant_loss_meter.avg, pp_meter.avg
 
 
-def validate(val_loader, model, device, quant_loss_weight, epoch=0, mask_null=False, null_threshold=1e-3):
+def validate(val_loader, model, device, quant_loss_weight, epoch=0, mask_null=False, null_threshold=1e-3, output_dir="Stage1_New/output"):
     accumulated_loss = 0.0
     accumulated_rec = 0.0
     accumulated_quant = 0.0
@@ -152,7 +180,8 @@ def validate(val_loader, model, device, quant_loss_weight, epoch=0, mask_null=Fa
 
             # save the reconstructed trees for visualization (mask zeros from input)
             if epoch % 20 == 0:
-                save_dir = Path("Stage1_New/reconstructions_stage1")
+                os.makedirs(os.path.join(output_dir, "reconstructions"), exist_ok=True)
+                save_dir = Path(os.path.join(output_dir, "reconstructions"))
                 save_dir.mkdir(parents=True, exist_ok=True)
                 for i in range(inputs.shape[0]):
                     input_tree = inputs[i].detach().cpu().numpy()
@@ -180,9 +209,10 @@ def main():
     logging_cfg = cfg.get("logging", {})
     wandb_cfg = cfg.get("wandb", {})
 
-    train_dir = paths.get("train_dir")
+    train_dir = paths.get("train_dir") 
     val_dir = paths.get("val_dir")
     output_dir = paths.get("output_dir", "Stage1_New/output")
+   # print(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     k = int(params.get("k", 39))
@@ -209,6 +239,7 @@ def main():
     prefetch_factor = params.get("dataloader_prefetch_factor", None)
     if prefetch_factor is not None:
         prefetch_factor = int(prefetch_factor)
+    use_padding = bool(params.get("use_padding", False))
 
     train_loader = build_loader(
         train_dir,
@@ -219,6 +250,7 @@ def main():
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
+        use_padding=use_padding,
     )
     val_loader = build_loader(
         val_dir,
@@ -229,6 +261,7 @@ def main():
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
+        use_padding=use_padding,
     )
 
     args_cfg = Args()
@@ -239,6 +272,20 @@ def main():
     args_cfg.gamma = gamma
     args_cfg.in_dim = int(params.get("in_dim", k))
     args_cfg.quant_loss_weight = float(params.get("quant_loss_weight", args_cfg.quant_loss_weight))
+    args_cfg.hidden_size = int(params.get("hidden_size", args_cfg.hidden_size))
+    args_cfg.num_hidden_layers = int(params.get("num_hidden_layers", args_cfg.num_hidden_layers))
+    args_cfg.num_attention_heads = int(params.get("num_attention_heads", args_cfg.num_attention_heads))
+    args_cfg.intermediate_size = int(params.get("intermediate_size", args_cfg.intermediate_size))
+    args_cfg.quant_factor = int(params.get("quant_factor", args_cfg.quant_factor))
+    args_cfg.neg = float(params.get("neg", args_cfg.neg))
+    args_cfg.INaffine = bool(params.get("INaffine", args_cfg.INaffine))
+    args_cfg.n_embed = int(params.get("n_embed", args_cfg.n_embed))
+    args_cfg.zquant_dim = int(params.get("zquant_dim", args_cfg.zquant_dim))
+
+    args_cfg.quantization_mode = params.get("quantization_mode", args_cfg.quantization_mode)
+    args_cfg.factor_count = int(params.get("factor_count", args_cfg.factor_count))
+    args_cfg.factor_dim = int(params.get("factor_dim", args_cfg.factor_dim))
+    args_cfg.face_quan_num = int(params.get("face_quan_num", args_cfg.face_quan_num))
 
     model = VQAutoEncoder(args_cfg).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
@@ -248,6 +295,8 @@ def main():
     save_every = int(logging_cfg.get("save_every", 100))
     save_best = bool(logging_cfg.get("save_best", True))
     best_model_path = logging_cfg.get("best_model_path", os.path.join(output_dir, "best-model-stage1.pth"))
+
+    
 
     wandb_enabled = bool(wandb_cfg.get("enabled", False))
     if wandb_enabled:
@@ -286,7 +335,8 @@ def main():
             args_cfg.quant_loss_weight,
             epoch=epoch,
             mask_null=mask_null,
-            null_threshold=null_threshold,
+            null_threshold=null_threshold, 
+            output_dir=output_dir,
         )
 
         if scheduler is not None:
@@ -313,6 +363,7 @@ def main():
             )
 
         if save_best:
+            #print('Test:', best_model_path)
             best_loss = save_best_model(
                 model,
                 optimizer,

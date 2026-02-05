@@ -1,42 +1,62 @@
 # Stage1 training config
 
 paths:
-  train_dir: '../Preprocessing_modular/DemoOutput/TreesSplines_20depth_prepared/train'
-  val_dir: '../Preprocessing_modular/DemoOutput/TreesSplines_20depth_prepared/val'
-  output_dir: Stage1_New/output_02
+  train_dir: '/data/Output/TreesSplines_100depth_prepared/train'
+  val_dir: '/data/Output/TreesSplines_100depth_prepared/val'
+  output_dir: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_04'
 
 params:
   k: 39
   in_dim: 39
   mode: post_order  # keep as-is when data is already pre_order
-  batch_size: 1
+  batch_size: 48
   batch_size_val: 1
-  base_lr: 0.0001
+  base_lr: 0.0005
   quant_loss_weight: 1.0
-  mask_null: false
+  mask_null: true
   null_threshold: 0.001
   epochs: 1000
   step_lr: true
   step_size: 200
 
+  # Model / quantizer settings
+  hidden_size: 512
+  num_hidden_layers: 6
+  num_attention_heads: 8
+  intermediate_size: 1536
+  quant_factor: 0
+  neg: 0.2
+  INaffine: false
+  n_embed: 256
+  zquant_dim: 64
+  face_quan_num: 16
+
+  # Quantization mode: legacy | factorized
+  quantization_mode: factorized
+  # Factorized mode settings (only used if quantization_mode=factorized)
+  factor_count: 4
+  factor_dim: 128  # hidden dimension factor_count*factor_dim = hidden_size
+
   gamma: 0.9
   seed: 125
   device: 0
-  dataloader_num_workers: 4
-  dataloader_pin_memory: true
-  dataloader_persistent_workers: true
-  dataloader_prefetch_factor: 2
+  dataloader_num_workers: 0
+  dataloader_pin_memory: false
+  dataloader_persistent_workers: false
+  dataloader_prefetch_factor: 0
+  # padding allows batching of variable length inputs by padding to max length in batch
+  use_padding: true
 
 logging:
   log_every: 10
   save_every: 100
   save_best: true
-  best_model_path: Stage1_New/output/best-model-stage1.pth
+  #best_model_path: #/data/Output/Stage1_New/best-model-stage1.pth
 
 wandb:
   enabled: true
   entity: VesselGPT
-  project: VesselGPT_VQVAE_03
+  project: VesselGPT_VQVAE_DGX_04
   mode: online
   watch: true
   # run_name: your_run_name_here

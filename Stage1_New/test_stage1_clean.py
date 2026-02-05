@@ -76,6 +76,9 @@ class Args:
         self.INaffine = False
         self.n_embed = 256
         self.zquant_dim = 64
+        self.quantization_mode = "legacy"
+        self.factor_count = 4
+        self.factor_dim = 128
 
 
 def build_args(model_cfg):

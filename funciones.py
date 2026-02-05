@@ -17,7 +17,7 @@ class Args:
         # LOSS settings
         self.quant_loss_weight = 1.
 
-        # NETWORK settings
+        # NETWORK settings 
         #self.arch = 'stage1_vocaset'
         self.in_dim = 4
         self.hidden_size = 1024
@@ -29,6 +29,13 @@ class Args:
         self.face_quan_num = 16
         self.neg = 0.2
         self.INaffine = False
+
+        # Quantization mode
+        # legacy: single codebook, split into face_quan_num chunks
+        # factorized: multiple codebooks (factor_count) with factor_dim each
+        self.quantization_mode = "legacy"
+        self.factor_count = 4
+        self.factor_dim = 128
 
         # VQuantizer settings
         self.n_embed = 256

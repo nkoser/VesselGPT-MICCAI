@@ -1,11 +1,11 @@
 ﻿# Cortar arboles (trim tree depth) config
 
 paths:
-  input_dir: 'DemoOutput1/TreesSplines'
-  output_dir: 'DemoOutput1/TreesSplines_20depth'
+  input_dir: '/data/Output/TreesSplines' 
+  output_dir: '/data/Output/TreesSplines_100depth'
 
 params:
-  max_depth: 20
+  max_depth: 100
   k: 39
   input_mode: post_order
   output_mode: pre_order

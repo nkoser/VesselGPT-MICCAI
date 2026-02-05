@@ -1,8 +1,8 @@
 # Dataset split config
 
 paths:
-  input: DemoOutput/TreesSplines_20depth_prepared
-  output: DemoOutput/TreesSplines_20depth_prepared
+  input: /data/Output/TreesSplines_100depth_prepared
+  output: /data/Output/TreesSplines_100depth_prepared
 
 params:
   train: 0.8
