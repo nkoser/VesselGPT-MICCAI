@@ -16,6 +16,9 @@ class VQAutoEncoder(BaseModel):
         self.decoder = TransformerDecoder(args, args.in_dim)
         self.use_factorized = getattr(args, "quantization_mode", "legacy") == "factorized"
         self.factor_proj_mode = getattr(args, "factor_proj", "split")
+        self.use_k_head = getattr(args, "use_k_head", False)
+        if self.use_k_head:
+            self.k_head = nn.Linear(args.hidden_size, args.k_classes)
         if self.use_factorized:
             self.quantizers = nn.ModuleList(
                 [VectorQuantizer(args.n_embed, args.factor_dim, beta=0.25) for _ in range(args.factor_count)]
@@ -89,9 +92,9 @@ class VQAutoEncoder(BaseModel):
         dec = self.decoder(quant) ## z' --> x
         return dec
     
-    def decode(self, quant):
+    def decode(self, quant, return_features=False):
         if self.use_factorized:
-            return self.decoder(quant)
+            return self.decoder(quant) if not return_features else self.decoder(quant, return_features=True)
         # Assuming quant has the shape (batch_size, num_tokens, zquant_dim)
         # Step 1: Reshape or permute the input tensor as required by your model
         # Change the shape to (B, num_tokens, zquant_dim) if needed
@@ -105,6 +108,9 @@ class VQAutoEncoder(BaseModel):
         quant = quant.permute(0, 2, 1)  # Change back to (batch_size, features, seq_len)
 
         # Step 4: Pass through the decoder
+        if return_features:
+            dec, dec_feat = self.decoder(quant, return_features=True)  # z' --> x
+            return dec, dec_feat
         dec = self.decoder(quant)  # z' --> x
 
         return dec
@@ -119,6 +125,10 @@ class VQAutoEncoder(BaseModel):
         quant, emb_loss, info = self.encode(x)
         #quant = self.encode(x)
         ### quant [B, C, L]
+        if self.use_k_head:
+            dec, dec_feat = self.decode(quant, return_features=True)
+            k_logits = self.k_head(dec_feat)
+            return dec, emb_loss, info, k_logits
         dec = self.decode(quant)
         #dec = dec + template
         return dec, emb_loss, info
@@ -391,6 +401,8 @@ class TransformerDecoder(nn.Module):
 
     decoder_features = self.decoder_transformer((decoder_features, dummy_mask))
     pred_recon = self.vertice_map_reverse(decoder_features)
+    if return_features:
+        return pred_recon, decoder_features
     return pred_recon
   
 def validate(val_loader, model, loss_fn, epoch, cfg, device):

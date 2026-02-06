@@ -38,6 +38,10 @@ class Args:
         self.factor_dim = 128
         # factor projection: split | linear_shared | linear_per_factor
         self.factor_proj = "split"
+        # Optional K-classification head
+        self.use_k_head = False
+        self.k_loss_weight = 1.0
+        self.k_classes = 4
 
         # VQuantizer settings
         self.n_embed = 256

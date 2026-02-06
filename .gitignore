@@ -17,3 +17,4 @@ __pycache__
 **/__pycache__/ 
 Stage1/base/__pycache__/__init__.cpython-311.pyc
 Stage1/base/__pycache__/base_model.cpython-311.pyc
+Stage2_New/wandb

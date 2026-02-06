@@ -3,7 +3,7 @@
 paths:
   train_dir: '/data/Output/TreesSplines_k_count_150depth_prepared/train'
   val_dir: '/data/Output/TreesSplines_k_count_150depth_prepared/val'
-  output_dir: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_06'
+  output_dir: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07'
 
 params:
   k: 39
@@ -15,7 +15,7 @@ params:
   quant_loss_weight: 1.0
   mask_null: true
   null_threshold: 0.001
-  epochs: 1000
+  epochs: 2000
   step_lr: true
   step_size: 200
 
@@ -39,6 +39,11 @@ params:
   # Factor projection: split | linear_shared | linear_per_factor
   factor_proj: linear_shared
 
+  # Optional K-head (classification for K-token)
+  use_k_head: false
+  k_loss_weight: 1.0
+  # k_classes: 4
+
   gamma: 0.9
   seed: 125
   device: 0
@@ -58,7 +63,7 @@ logging:
 wandb:
   enabled: true
   entity: VesselGPT
-  project: VesselGPT_VQVAE_DGX_06
+  project: VesselGPT_VQVAE_DGX_07
   mode: online
   watch: true
   # run_name: your_run_name_here

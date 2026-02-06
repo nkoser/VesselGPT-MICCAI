@@ -170,9 +170,9 @@ def main():
     fig = plt.figure(figsize=tuple(params.get("figsize", [10, 10])))
     ax = fig.add_subplot(111, projection="3d")
 
-    edge_alpha = float(params.get("edge_alpha", 0.6))
+    edge_alpha = float(params.get("edge_alpha", 0.4))
     edge_width = float(params.get("edge_width", 1.0))
-    node_size = float(params.get("node_size", 8.0))
+    node_size = float(params.get("node_size", 8.0)) 
 
     color_a = params.get("color_a", "#1f77b4")
     color_b = params.get("color_b", "#ff7f0e")
@@ -190,8 +190,8 @@ def main():
 
     if bool(params.get("draw_splines", False)):
         n_samples = int(params.get("spline_samples", 50))
-        alpha = float(params.get("spline_alpha", 0.6))
-        size = float(params.get("spline_size", 0.5))
+        alpha = float(params.get("spline_alpha", 0.4))
+        size = float(params.get("spline_size", 0.4))
         center_root = bool(params.get("spline_center_root", True))
         draw_splines(ax, tree_a_nodes, root_a, n_samples, params.get("spline_color_a", color_a), alpha, size, center_root)
         draw_splines(ax, tree_b_nodes, root_b, n_samples, params.get("spline_color_b", color_b), alpha, size, center_root)
@@ -220,3 +220,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# %%

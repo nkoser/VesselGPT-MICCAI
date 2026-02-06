@@ -21,7 +21,7 @@ params:
   null_id: 258
   zero_threshold: 0.01
   clean_knots: true
-  knot_tolerance: 0.01
+  knot_tolerance: 0.01 
   visualize: false
   visualize_limit: 3
   visualize_mode: pre_order

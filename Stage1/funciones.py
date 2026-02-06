@@ -36,6 +36,19 @@ class Args:
         self.neg = 0.2
         self.INaffine = False
 
+        # Quantization mode
+        # legacy: single codebook, split into face_quan_num chunks
+        # factorized: multiple codebooks (factor_count) with factor_dim each
+        self.quantization_mode = "legacy"
+        self.factor_count = 4
+        self.factor_dim = 128
+        # factor projection: split | linear_shared | linear_per_factor
+        self.factor_proj = "split"
+        # Optional K-classification head
+        self.use_k_head = False
+        self.k_loss_weight = 1.0
+        self.k_classes = 4
+
         # VQuantizer settings
         self.n_embed = 256
         self.zquant_dim = 64#64

@@ -1,7 +1,7 @@
 paths:
-  input_dir: DemoOutput/TreesSplines_20depth_prepared/train
-  output_dir: DemoOutput/TreesSplines_20depth_tokens/train
-  model_checkpoint: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/output_02/checkpoint-epoch1000.pth
+  input_dir: /data/Output/TreesSplines_k_count_150depth_prepared/val
+  output_dir: /data/Output/TreesSplines_k_count_150depth_tokens/val
+  model_checkpoint: /data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07/best-model-stage1.pth
 
 params:
   k: 39
@@ -19,3 +19,16 @@ params:
 model:
   in_dim: 40
   n_embed: 256
+  hidden_size: 512
+  num_hidden_layers: 6
+  num_attention_heads: 8
+  intermediate_size: 1536
+  quant_factor: 0
+  face_quan_num: 16
+  neg: 0.2
+  INaffine: false
+  zquant_dim: 64
+  quantization_mode: factorized
+  factor_count: 4
+  factor_dim: 128
+  factor_proj: linear_shared

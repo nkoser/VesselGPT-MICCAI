@@ -10,6 +10,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 from transformers import GPT2Config, GPT2LMHeadModel, get_scheduler
+from tqdm import tqdm
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
@@ -125,7 +126,7 @@ def train_one_epoch(dataloader, model, optimizer, lr_scheduler, device, pad_toke
             raise ValueError("vocab_size is required when track_usage is enabled.")
         token_counts = torch.zeros(vocab_size, dtype=torch.long)
     model.train()
-    for batch in dataloader:
+    for batch in tqdm(dataloader, desc="train", leave=False):
         batch = batch.to(device)
         attention_mask = create_attention_mask(batch, pad_token).to(device)
         outputs = model(batch, labels=batch, attention_mask=attention_mask)
@@ -158,7 +159,7 @@ def val_one_epoch(dataloader, model, device, pad_token, track_usage=False, vocab
         token_counts = torch.zeros(vocab_size, dtype=torch.long)
 
     with torch.no_grad():
-        for batch in dataloader:
+        for batch in tqdm(dataloader, desc="val", leave=False):
             batch = batch.to(device)
             attention_mask = create_attention_mask(batch, pad_token).to(device)
             outputs = model(batch, labels=batch, attention_mask=attention_mask)
@@ -192,14 +193,14 @@ def create_gpt2_model(cfg, vocab_size, max_size, pad_token):
 
 def main():
     parser = argparse.ArgumentParser(description="Train GPT-2 on tokenized tree sequences.")
-    parser.add_argument("--config", default="config.yaml", help="Path to YAML config")
+    parser.add_argument("--config", default="econfig.yaml", help="Path to YAML config")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     paths = cfg.get("paths", {})
     params = cfg.get("params", {})
     model_cfg = cfg.get("model", {})
-    wandb_cfg = cfg.get("wandb", {})
+    wandb_cfg = cfg.get("wandb", {}) 
 
     train_dir = paths.get("train_dir")
     val_dir = paths.get("val_dir")
@@ -225,12 +226,13 @@ def main():
     seed_all(seed)
 
     train_loader = build_dataset(train_dir, eos_token, pad_token, batch_size, shuffle)
-    #val_loader = build_dataset(val_dir, eos_token, pad_token, batch_size, False)
+    val_loader = None
+    if val_dir:
+        val_loader = build_dataset(val_dir, eos_token, pad_token, batch_size, False)
 
     max_train_len = max((len(seq) for seq in train_loader), default=0)
-    #max_val_len = max((len(seq) for seq in val_loader), default=0)
-    #max_len = max(max_train_len, max_val_len)
-    max_len = max_train_len
+    max_val_len = max((len(seq) for seq in val_loader), default=0) if val_loader else 0
+    max_len = max(max_train_len, max_val_len)
     if max_len > max_size:
         print(f"Warning: dataset max length {max_len} exceeds max_size {max_size}.")
 
@@ -284,57 +286,70 @@ def main():
                 track_usage=True,
                 vocab_size=vocab_size,
             )
-            #val_avg_loss, val_counts = val_one_epoch(
-            #    val_loader,
-            #    model,
-            #    device,
-            #    pad_token,
-            #    track_usage=True,
-             #   vocab_size=vocab_size,
-            #)
+            if val_loader:
+                val_avg_loss, val_counts = val_one_epoch(
+                    val_loader,
+                    model,
+                    device,
+                    pad_token,
+                    track_usage=True,
+                    vocab_size=vocab_size,
+                )
             train_usage_ppl = compute_usage_perplexity(train_counts, usage_exclude_ids)
-            #val_usage_ppl = compute_usage_perplexity(val_counts, usage_exclude_ids)
+            val_usage_ppl = compute_usage_perplexity(val_counts, usage_exclude_ids) if val_loader else None
         else:
             train_avg_loss = train_one_epoch(train_loader, model, optimizer, lr_scheduler, device, pad_token)
-            #val_avg_loss = val_one_epoch(val_loader, model, device, pad_token)
+            val_avg_loss = val_one_epoch(val_loader, model, device, pad_token) if val_loader else None
             train_usage_ppl = None
-            #val_usage_ppl = None
+            val_usage_ppl = None
 
         try:
             train_ppl = math.exp(train_avg_loss)
         except OverflowError:
             train_ppl = float("inf")
-        #try:
-        #    val_ppl = math.exp(val_avg_loss)
-        #except OverflowError:
-        #    val_ppl = float("inf")
+        if val_avg_loss is not None:
+            try:
+                val_ppl = math.exp(val_avg_loss)
+            except OverflowError:
+                val_ppl = float("inf")
+        else:
+            val_ppl = None
 
         if epoch % log_every == 0:
-            msg = (
-               # f"Epoch {epoch} | Train Avg Loss: {train_avg_loss} | Val Avg Loss: {val_avg_loss} | "
-                #f"Train PPL: {train_ppl} | Val PPL: {val_ppl}"
-                f"Epoch {epoch} | Train Avg Loss: {train_avg_loss} |  Train PPL: {train_ppl}"
-            )
+            msg = f"Epoch {epoch} | Train Avg Loss: {train_avg_loss} |  Train PPL: {train_ppl}"
+            if val_avg_loss is not None:
+                msg += f" | Val Avg Loss: {val_avg_loss} | Val PPL: {val_ppl}"
             if track_usage:
-                #msg += f" | Train Usage PPL: {train_usage_ppl} | Val Usage PPL: {val_usage_ppl}"
                 msg += f" | Train Usage PPL: {train_usage_ppl}"
+                if val_usage_ppl is not None:
+                    msg += f" | Val Usage PPL: {val_usage_ppl}"
             print(msg)
 
         if wandb_enabled:
             payload = {
                 "epoch": epoch,
                 "avg_loss": train_avg_loss,
-                #"val_avg_loss": val_avg_loss,
                 "train_perplexity": train_ppl,
-                #"val_perplexity": val_ppl,
             }
+            if val_avg_loss is not None:
+                payload.update(
+                    {
+                        "val_avg_loss": val_avg_loss,
+                        "val_perplexity": val_ppl,
+                    }
+                )
             if track_usage:
                 payload.update(
                     {
                         "train_usage_perplexity": train_usage_ppl,
-                        #"val_usage_perplexity": val_usage_ppl,
                     }
                 )
+                if val_usage_ppl is not None:
+                    payload.update(
+                        {
+                            "val_usage_perplexity": val_usage_ppl,
+                        }
+                    )
             wandb.log(payload)
 
         os.makedirs(output_dir, exist_ok=True)

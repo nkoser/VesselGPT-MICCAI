@@ -118,7 +118,18 @@ def calc_vq_loss_masked(pred, target, quant_loss, quant_loss_weight, mask=None):
     return total_loss, (rec_loss, quant_loss)
 
 
-def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight, mask_null=False, null_threshold=1e-3):
+def train_one_epoch(
+    model,
+    data_loader,
+    optimizer,
+    device,
+    quant_loss_weight,
+    mask_null=False,
+    null_threshold=1e-3,
+    use_k_head=False,
+    k_loss_weight=1.0,
+    k_classes=4,
+):
     model.train()
     rec_loss_meter = AverageMeter()
     quant_loss_meter = AverageMeter()
@@ -129,13 +140,37 @@ def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight, ma
         inputs = inputs.to(device)
         if inputs.shape[1] <= 1:
             continue
-        out, quant_loss, info = model(inputs)
+        if use_k_head:
+            out, quant_loss, info, k_logits = model(inputs)
+        else:
+            out, quant_loss, info = model(inputs)
         mask = None
         if mask_null:
             mask = torch.all(torch.abs(inputs) <= null_threshold, dim=2)
-        loss, loss_details = calc_vq_loss_masked(
-            out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
-        )
+        if use_k_head:
+            pred_feat = out[:, :, 1:]
+            target_feat = inputs[:, :, 1:]
+            loss, loss_details = calc_vq_loss_masked(
+                pred_feat, target_feat, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
+            )
+            target_k = inputs[:, :, 0]
+            target_k = torch.round(target_k).clamp(0, k_classes - 1).long()
+            k_loss_raw = torch.nn.functional.cross_entropy(
+                k_logits.reshape(-1, k_classes), target_k.reshape(-1), reduction="none"
+            )
+            if mask is not None:
+                valid = (~mask).reshape(-1)
+                if valid.any():
+                    k_loss = k_loss_raw[valid].mean()
+                else:
+                    k_loss = torch.zeros((), device=inputs.device)
+            else:
+                k_loss = k_loss_raw.mean()
+            loss = loss + k_loss_weight * k_loss
+        else:
+            loss, loss_details = calc_vq_loss_masked(
+                out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
+            )
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -156,7 +191,19 @@ def train_one_epoch(model, data_loader, optimizer, device, quant_loss_weight, ma
     return total_loss_meter.avg, rec_loss_meter.avg, quant_loss_meter.avg, pp_meter.avg
 
 
-def validate(val_loader, model, device, quant_loss_weight, epoch=0, mask_null=False, null_threshold=1e-3, output_dir="Stage1_New/output"):
+def validate(
+    val_loader,
+    model,
+    device,
+    quant_loss_weight,
+    epoch=0,
+    mask_null=False,
+    null_threshold=1e-3,
+    output_dir="Stage1_New/output",
+    use_k_head=False,
+    k_loss_weight=1.0,
+    k_classes=4,
+):
     accumulated_loss = 0.0
     accumulated_rec = 0.0
     accumulated_quant = 0.0
@@ -167,13 +214,37 @@ def validate(val_loader, model, device, quant_loss_weight, epoch=0, mask_null=Fa
             inputs = inputs.to(device)
             if inputs.shape[1] <= 1:
                 continue
-            out, quant_loss, _info = model(inputs)
+            if use_k_head:
+                out, quant_loss, _info, k_logits = model(inputs)
+            else:
+                out, quant_loss, _info = model(inputs)
             mask = None
             if mask_null:
                 mask = torch.all(torch.abs(inputs) <= null_threshold, dim=2)
-            loss, loss_details = calc_vq_loss_masked(
-                out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
-            )
+            if use_k_head:
+                pred_feat = out[:, :, 1:]
+                target_feat = inputs[:, :, 1:]
+                loss, loss_details = calc_vq_loss_masked(
+                    pred_feat, target_feat, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
+                )
+                target_k = inputs[:, :, 0]
+                target_k = torch.round(target_k).clamp(0, k_classes - 1).long()
+                k_loss_raw = torch.nn.functional.cross_entropy(
+                    k_logits.reshape(-1, k_classes), target_k.reshape(-1), reduction="none"
+                )
+                if mask is not None:
+                    valid = (~mask).reshape(-1)
+                    if valid.any():
+                        k_loss = k_loss_raw[valid].mean()
+                    else:
+                        k_loss = torch.zeros((), device=inputs.device)
+                else:
+                    k_loss = k_loss_raw.mean()
+                loss = loss + k_loss_weight * k_loss
+            else:
+                loss, loss_details = calc_vq_loss_masked(
+                    out, inputs, quant_loss=quant_loss, quant_loss_weight=quant_loss_weight, mask=mask
+                )
             accumulated_loss += loss
             accumulated_rec += loss_details[0]
             accumulated_quant += loss_details[1]
@@ -287,6 +358,12 @@ def main():
     args_cfg.factor_dim = int(params.get("factor_dim", args_cfg.factor_dim))
     args_cfg.face_quan_num = int(params.get("face_quan_num", args_cfg.face_quan_num))
     args_cfg.factor_proj = params.get("factor_proj", args_cfg.factor_proj)
+    args_cfg.use_k_head = bool(params.get("use_k_head", args_cfg.use_k_head))
+    args_cfg.k_loss_weight = float(params.get("k_loss_weight", args_cfg.k_loss_weight))
+    if "k_classes" in params:
+        args_cfg.k_classes = int(params.get("k_classes"))
+    else:
+        args_cfg.k_classes = 3 if mode in {"pre_order_kcount", "pre_order_k"} else args_cfg.k_classes
 
     model = VQAutoEncoder(args_cfg).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
@@ -328,6 +405,9 @@ def main():
             args_cfg.quant_loss_weight,
             mask_null=mask_null,
             null_threshold=null_threshold,
+            use_k_head=args_cfg.use_k_head,
+            k_loss_weight=args_cfg.k_loss_weight,
+            k_classes=args_cfg.k_classes,
         )
         val_loss, rec_loss_val, quant_loss_val = validate(
             val_loader,
@@ -338,6 +418,9 @@ def main():
             mask_null=mask_null,
             null_threshold=null_threshold, 
             output_dir=output_dir,
+            use_k_head=args_cfg.use_k_head,
+            k_loss_weight=args_cfg.k_loss_weight,
+            k_classes=args_cfg.k_classes,
         )
 
         if scheduler is not None:

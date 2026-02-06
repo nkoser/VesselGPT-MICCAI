@@ -1,10 +1,13 @@
 # Compare two trees (overlay)
 
 paths:
-  tree_a: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/input_epoch_1001_batch_0_sample_60.npy'
-  tree_b: '/home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/recon_epoch_1001_batch_0_sample_60.npy'
+  #tree_a: '/data/Output/TreesSplines_k_count_150depth_prepared/test/C0049.npy'
+  tree_a: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07/reconstructions_stage1/C0097.npy'
+  #tree_b: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07/reconstructions_stage1/C0049.npy'
+  #tree_b: 'Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07/reconstructions1/recon_epoch_1821_batch_0_sample_69.npy'
+  tree_b: '/data/Output/TreesSplines_k_count_150depth_prepared/test/C0097.npy'
   # mask_from: '/home/sukin707/VesselGPT/Stage1_New/reconstructions_stage1/input_0.npy'
-  # output_image: Preprocessing_modular/compare_trees.png
+  output_image: '/data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07/tree_comparison_C0097**.png'
 
 params:
   k: 39

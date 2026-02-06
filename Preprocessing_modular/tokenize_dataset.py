@@ -144,14 +144,19 @@ def main():
             tensor = torch.tensor(data, dtype=torch.float32).unsqueeze(0).to(device)
             with torch.no_grad():
                 _quant, indices = model.get_quant(tensor)
-            tokens = indices.view(-1).detach().cpu().long()
+            if isinstance(indices, (list, tuple)):
+                factor_indices = [idx.view(tensor.shape[0], -1) for idx in indices]
+                stacked = torch.stack(factor_indices, dim=-1)  # B, L, F
+                tokens = stacked.reshape(-1).detach().cpu().long()
+                tokens_per_row = stacked.shape[-1]
+            else:
+                tokens = indices.view(-1).detach().cpu().long()
             if tokens.numel() % data.shape[0] != 0:
                 raise ValueError(
                     f"{file_path} produced {tokens.numel()} tokens for {data.shape[0]} rows. "
                     "Check quant_factor or preprocessing."
                 )
-            tokens_per_row = tokens.numel() // data.shape[0]
-            if tokens_per_row != int(args_cfg.face_quan_num):
+            if tokens_per_row != int(args_cfg.face_quan_num) and not isinstance(indices, (list, tuple)):
                 print(
                     f"Warning: tokens per row ({tokens_per_row}) != face_quan_num ({args_cfg.face_quan_num})."
                 )

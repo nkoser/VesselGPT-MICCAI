@@ -1,8 +1,9 @@
 paths:
+  input_dir: /data/Output/TreesSplines_k_count_150depth_prepared/test/
   split_file_list: null
   root_dir: null
   p: null
-  output_dir: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1
+  output_dir: /data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07/reconstructions_stage1
   compare_original: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/input_epoch_721_batch_0_sample_8.npy
   compare_generated: /home/sukin707/VesselGPT/Stage1_New/Stage1_New/reconstructions_stage1/recon_epoch_721_batch_0_sample_8.npy
 
@@ -12,19 +13,20 @@ params:
   k: 39
   batch_size: 1
   shuffle: true
-  threshold: 0.01
+  threshold: 0.01 
   sample_limit: null
   device: 0
   seed: 12
-  run_reconstruction: false
-  run_compare: true
-  run_visualize: true
+  apply_threshold: false
+  run_reconstruction: true
+  run_compare: false
+  run_visualize: false
 
 model:
   type: vocaset
-  checkpoint: models/stage1/aneux/best-model-aneux15-zero-root.pth
+  checkpoint: /data/Output/Result/Stage1_New/VesselGPT_VQVAE_DGX_07/best-model-stage1.pth
   in_dim: 40
-  hidden_size: 1024
+  hidden_size: 512
   num_hidden_layers: 6
   num_attention_heads: 8
   intermediate_size: 1536
@@ -35,10 +37,13 @@ model:
   INaffine: false
   n_embed: 256
   zquant_dim: 64
-  quantization_mode: legacy
+  quantization_mode: factorized
   factor_count: 4
   factor_dim: 128
-  factor_proj: split
+  factor_proj: linear_shared
+  use_k_head: false
+  k_loss_weight: 1.0
+  # k_classes: 4
   emma:
     hidden_dim: 512
     codebook_size: 2048

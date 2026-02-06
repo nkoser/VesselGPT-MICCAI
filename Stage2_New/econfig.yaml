@@ -1,8 +1,8 @@
 paths:
-  train_dir: ../Preprocessing_modular/DemoOutput/TreesSplines_20depth_tokens/train
-  val_dir: ../Preprocessing_modular/DemoOutput/TreesSplines_20depth_tokens/val
-  output_dir: Stage2_New/output_02
-  best_model_dir: Stage2_New/output/best-gpt2
+  train_dir: /data/Output/TreesSplines_k_count_150depth_tokens/train
+  val_dir: /data/Output/TreesSplines_k_count_150depth_tokens/val
+  output_dir: /data/Output/VesselGPT_GPT2_DGX_07
+  best_model_dir: /data/Output/VesselGPT_GPT2_DGX_07/best-gpt2
 
 params:
   vocab_size: 259
@@ -10,8 +10,8 @@ params:
   pad_token: 257
   eos_token: 256
   epochs: 50000
-  lr: 0.0001
-  batch_size: 4
+  lr: 0.0009
+  batch_size: 128
   shuffle: false
   warmup_steps: 0
   scheduler: linear
@@ -31,4 +31,4 @@ wandb:
   project: gpt2
   #entity: vesselgpt
   mode: online
-  run_name: first_run_stage2_new_01
+  run_name: VesselGPT_GPT2_DGX_07

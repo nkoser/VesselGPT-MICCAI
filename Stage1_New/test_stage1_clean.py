@@ -50,7 +50,7 @@ def resolve_device(device_value):
             return torch.device(device_value)
     print("CUDA not available. Using CPU.")
     return torch.device("cpu")
-
+ 
 
 def load_file_list(txt_path):
     with open(txt_path, "r", encoding="utf-8") as f:
@@ -65,7 +65,7 @@ class Args:
     def __init__(self):
         self.quant_loss_weight = 1.0
         self.in_dim = 39
-        self.hidden_size = 1024
+        self.hidden_size = 1024 
         self.num_hidden_layers = 6
         self.num_attention_heads = 8
         self.intermediate_size = 1536
@@ -80,6 +80,9 @@ class Args:
         self.factor_count = 4
         self.factor_dim = 128
         self.factor_proj = "split"
+        self.use_k_head = False
+        self.k_loss_weight = 1.0
+        self.k_classes = 4
 
 
 def build_args(model_cfg):
@@ -131,6 +134,14 @@ def run_reconstruction(cfg, model, device):
     batch_size = int(params.get("batch_size", 1))
     shuffle = bool(params.get("shuffle", True))
     threshold = float(params.get("threshold", 1e-2))
+    apply_threshold = params.get("apply_threshold", None)
+    if apply_threshold is None:
+        apply_threshold = mode not in {"pre_order_kcount", "pre_order_k", "pre_order_kdir", "pre_order_k_lr"}
+    apply_threshold = bool(apply_threshold)
+    quantize_k = params.get("quantize_k", None)
+    if quantize_k is None:
+        quantize_k = mode in {"pre_order_kdir", "pre_order_k_lr", "pre_order_kcount", "pre_order_k"}
+    quantize_k = bool(quantize_k)
     sample_limit = params.get("sample_limit", None)
     if sample_limit is not None:
         sample_limit = int(sample_limit)
@@ -145,9 +156,25 @@ def run_reconstruction(cfg, model, device):
             if inputs.shape[1] <= 1:
                 continue
             inputs = inputs.to(device)
-            generated_tree, _quant = model.sample_step(inputs)
-            generated = generated_tree.detach().cpu().numpy()[0]
-            generated[np.abs(generated) < threshold] = 0
+            if getattr(model, "use_k_head", False):
+                generated_tree, _quant, _info, k_logits = model(inputs)
+                generated = generated_tree.detach().cpu().numpy()[0]
+                k_vals = torch.argmax(k_logits[0], dim=-1).detach().cpu().numpy()
+                generated[:, 0] = k_vals
+            else:
+                generated_tree, _quant = model.sample_step(inputs)
+                generated = generated_tree.detach().cpu().numpy()[0]
+            if quantize_k:
+                k_vals = generated[:, 0]
+                if mode in {"pre_order_kdir", "pre_order_k_lr"}:
+                    k_vals = np.rint(k_vals)
+                    k_vals = np.clip(k_vals, 0, 3)
+                else:
+                    k_vals = np.rint(k_vals)
+                    k_vals = np.clip(k_vals, 0, 2)
+                generated[:, 0] = k_vals
+            if apply_threshold:
+                generated[np.abs(generated) < threshold] = 0
             name = get_filename(file_name)
             np.save(os.path.join(output_dir, name), generated)
             saved += 1
@@ -231,6 +258,9 @@ def main():
         raise ValueError("model.checkpoint is required.")
 
     args_cfg = build_args(model_cfg)
+    if "k_classes" not in model_cfg:
+        mode = params.get("mode", "pre_order")
+        args_cfg.k_classes = 3 if mode in {"pre_order_kcount", "pre_order_k"} else args_cfg.k_classes
     if model_type == "emma":
         if VQbatch is None:
             raise RuntimeError("stage1Emma model is not available in this environment.")
