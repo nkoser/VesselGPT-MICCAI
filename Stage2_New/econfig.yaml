@@ -20,6 +20,15 @@ params:
   log_every: 1
   track_token_usage: false
   token_usage_exclude_ids: []
+  mem_check_enabled: true
+  mem_check_every: 1
+  mem_check_samples: 16
+  mem_check_max_new_tokens: 512
+  mem_check_do_sample: true
+  mem_check_temperature: 1.0
+  mem_check_top_k: 50
+  mem_check_top_p: 0.95
+  mem_check_num_beams: 1
 
 model:
   n_embd: 512

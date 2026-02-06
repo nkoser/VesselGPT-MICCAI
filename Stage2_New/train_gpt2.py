@@ -1,9 +1,11 @@
 import argparse
 import gc
+import hashlib
 import math
 import os
 import random
 import sys
+from array import array
 from pathlib import Path
 
 import torch
@@ -116,6 +118,60 @@ def compute_usage_perplexity(counts, exclude_ids=None):
     probs = probs[probs > 0]
     entropy = -(probs * torch.log(probs)).sum()
     return float(torch.exp(entropy))
+
+
+def _strip_sequence(seq, eos_token, pad_token):
+    seq = [int(x) for x in seq if int(x) != pad_token]
+    if seq and seq[0] == eos_token:
+        seq = seq[1:]
+    if eos_token in seq:
+        seq = seq[:seq.index(eos_token)]
+    return seq
+
+
+def _seq_hash(seq):
+    if not seq:
+        return None
+    payload = array("H", seq).tobytes()
+    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+
+
+def build_sequence_hashes(samples, eos_token, pad_token):
+    hashes = set()
+    for sample in samples:
+        seq = _strip_sequence(sample.tolist(), eos_token, pad_token)
+        digest = _seq_hash(seq)
+        if digest is not None:
+            hashes.add(digest)
+    return hashes
+
+
+def sample_sequences_for_mem_check(
+    model,
+    device,
+    eos_token,
+    pad_token,
+    num_samples,
+    max_new_tokens,
+    do_sample=True,
+    temperature=1.0,
+    top_k=50,
+    top_p=0.95,
+    num_beams=1,
+):
+    input_ids = torch.full((num_samples, 1), eos_token, dtype=torch.long, device=device)
+    outputs = model.generate(
+        input_ids=input_ids,
+        max_new_tokens=max_new_tokens,
+        do_sample=do_sample,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        num_beams=num_beams,
+        eos_token_id=eos_token,
+        pad_token_id=pad_token,
+    )
+    return outputs
 
 
 def train_one_epoch(dataloader, model, optimizer, lr_scheduler, device, pad_token, track_usage=False, vocab_size=None):
@@ -269,8 +325,22 @@ def main():
     track_usage = bool(params.get("track_token_usage", False))
     usage_exclude_ids = params.get("token_usage_exclude_ids", [])
     if usage_exclude_ids is None:
-        usage_exclude_ids = []
+        usage_exclude_ids = [] 
     usage_exclude_ids = [int(x) for x in usage_exclude_ids]
+
+    mem_check_enabled = bool(params.get("mem_check_enabled", False))
+    mem_check_every = int(params.get("mem_check_every", 1))
+    mem_check_samples = int(params.get("mem_check_samples", 16))
+    mem_check_max_new_tokens = int(params.get("mem_check_max_new_tokens", 512))
+    mem_check_do_sample = bool(params.get("mem_check_do_sample", True))
+    mem_check_temperature = float(params.get("mem_check_temperature", 1.0))
+    mem_check_top_k = int(params.get("mem_check_top_k", 50))
+    mem_check_top_p = float(params.get("mem_check_top_p", 0.95))
+    mem_check_num_beams = int(params.get("mem_check_num_beams", 1))
+
+    train_hashes = None
+    if mem_check_enabled:
+        train_hashes = build_sequence_hashes(train_loader.dataset.samples, eos_token, pad_token)
 
     # Training Loop
     model.train()
@@ -315,6 +385,36 @@ def main():
         else:
             val_ppl = None
 
+        mem_exact_match_rate = None
+        mem_unique_rate = None
+        if mem_check_enabled and (epoch % mem_check_every == 0):
+            model.eval()
+            with torch.no_grad():
+                gen = sample_sequences_for_mem_check(
+                    model,
+                    device,
+                    eos_token,
+                    pad_token,
+                    mem_check_samples,
+                    mem_check_max_new_tokens,
+                    do_sample=mem_check_do_sample,
+                    temperature=mem_check_temperature,
+                    top_k=mem_check_top_k,
+                    top_p=mem_check_top_p,
+                    num_beams=mem_check_num_beams,
+                )
+            model.train()
+            gen_hashes = []
+            for seq in gen:
+                stripped = _strip_sequence(seq.tolist(), eos_token, pad_token)
+                digest = _seq_hash(stripped)
+                if digest is not None:
+                    gen_hashes.append(digest)
+            if gen_hashes:
+                hits = sum(1 for h in gen_hashes if h in train_hashes)
+                mem_exact_match_rate = hits / len(gen_hashes)
+                mem_unique_rate = len(set(gen_hashes)) / len(gen_hashes)
+
         if epoch % log_every == 0:
             msg = f"Epoch {epoch} | Train Avg Loss: {train_avg_loss} |  Train PPL: {train_ppl}"
             if val_avg_loss is not None:
@@ -323,6 +423,11 @@ def main():
                 msg += f" | Train Usage PPL: {train_usage_ppl}"
                 if val_usage_ppl is not None:
                     msg += f" | Val Usage PPL: {val_usage_ppl}"
+            if mem_exact_match_rate is not None:
+                msg += (
+                    f" | Mem ExactMatch: {mem_exact_match_rate:.3f}"
+                    f" | Mem Unique: {mem_unique_rate:.3f}"
+                )
             print(msg)
 
         if wandb_enabled:
@@ -350,6 +455,13 @@ def main():
                             "val_usage_perplexity": val_usage_ppl,
                         }
                     )
+            if mem_exact_match_rate is not None:
+                payload.update(
+                    {
+                        "mem_exact_match_rate": mem_exact_match_rate,
+                        "mem_unique_rate": mem_unique_rate,
+                    }
+                )
             wandb.log(payload)
 
         os.makedirs(output_dir, exist_ok=True)
